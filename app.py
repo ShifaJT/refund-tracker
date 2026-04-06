@@ -3,12 +3,13 @@ import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
 
+# ================= CONFIG =================
 st.set_page_config(page_title="Refund Tracker", layout="wide")
 
 st.title("💰 Refund Tracker")
 st.info("Rule: <3 refunds → APPROVE | ≥3 → DENY")
 
-# ---------- GOOGLE AUTH ----------
+# ================= GOOGLE AUTH =================
 @st.cache_resource
 def get_client():
     creds = Credentials.from_service_account_info(
@@ -20,7 +21,7 @@ def get_client():
     )
     return gspread.authorize(creds)
 
-# ---------- LOAD DATA ----------
+# ================= LOAD DATA =================
 @st.cache_data(ttl=600)
 def load_sheet(sheet_id):
     client = get_client()
@@ -31,12 +32,12 @@ def load_sheet(sheet_id):
 cash_df = load_sheet(st.secrets["cash_upi_sheet_id"])
 jc_df = load_sheet(st.secrets["jumbocash_sheet_id"])
 
-# ---------- INPUT ----------
+# ================= INPUT =================
 col1, col2 = st.columns(2)
 bzid_input = col1.text_input("Enter BZID")
 month_input = col2.selectbox("Select Month", list(range(1, 13)))
 
-# ---------- PROCESS ----------
+# ================= PROCESS =================
 if st.button("Fetch Details"):
 
     if not bzid_input:
@@ -48,10 +49,10 @@ if st.button("Fetch Details"):
     # ===== CASH / UPI =====
     cash_df["BZID"] = cash_df["Business ID"].astype(str).str.strip().str.upper()
 
-    cash_df["Date"] = pd.to_datetime(cash_df["Date"], errors="coerce")
-    cash_df["Timestamp"] = pd.to_datetime(cash_df["Timestamp"], errors="coerce")
+    cash_df["Date1"] = pd.to_datetime(cash_df["Date"], errors="coerce")
+    cash_df["Date2"] = pd.to_datetime(cash_df["Timestamp"], errors="coerce")
 
-    cash_df["Final_Date"] = cash_df["Date"].fillna(cash_df["Timestamp"])
+    cash_df["Final_Date"] = cash_df["Date1"].fillna(cash_df["Date2"])
 
     cash_matches = cash_df[
         (cash_df["BZID"] == bzid) &
@@ -62,12 +63,15 @@ if st.button("Fetch Details"):
     # ===== JUMBOCASH (FIXED) =====
     jc_df["BZID"] = jc_df["BZID"].astype(str).str.strip().str.upper()
 
-    jc_df["Date"] = pd.to_datetime(jc_df["date"], errors="coerce")
+    jc_df["Date1"] = pd.to_datetime(jc_df["date"], errors="coerce")
+    jc_df["Date2"] = pd.to_datetime(jc_df["Timestamp"], errors="coerce")
+
+    jc_df["Final_Date"] = jc_df["Date1"].fillna(jc_df["Date2"])
 
     jc_matches = jc_df[
         (jc_df["BZID"] == bzid) &
-        (jc_df["Date"].notna()) &
-        (jc_df["Date"].dt.month == month_input)
+        (jc_df["Final_Date"].notna()) &
+        (jc_df["Final_Date"].dt.month == month_input)
     ]
 
     # ===== CALCULATIONS =====
