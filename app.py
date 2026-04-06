@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
+from datetime import datetime
 
 # ================= CONFIG =================
 st.set_page_config(page_title="Refund Tracker", layout="wide")
@@ -34,8 +35,16 @@ jc_df = load_sheet(st.secrets["jumbocash_sheet_id"])
 
 # ================= INPUT =================
 col1, col2 = st.columns(2)
+
 bzid_input = col1.text_input("Enter BZID")
-month_input = col2.selectbox("Select Month", list(range(1, 13)))
+
+# Month dropdown (January 2026 format)
+month_options = {
+    datetime(2026, i, 1).strftime("%B 2026"): i for i in range(1, 13)
+}
+
+selected_month_label = col2.selectbox("Select Month", list(month_options.keys()))
+month_input = month_options[selected_month_label]
 
 # ================= PROCESS =================
 if st.button("Fetch Details"):
@@ -60,7 +69,7 @@ if st.button("Fetch Details"):
         (cash_df["Final_Date"].dt.month == month_input)
     ]
 
-    # ===== JUMBOCASH (FIXED) =====
+    # ===== JUMBOCASH =====
     jc_df["BZID"] = jc_df["BZID"].astype(str).str.strip().str.upper()
 
     jc_df["Date1"] = pd.to_datetime(jc_df["date"], errors="coerce")
