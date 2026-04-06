@@ -1,24 +1,30 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
 import gspread
 from google.oauth2.service_account import Credentials
 
-# ================= UI =================
+# ================= PAGE CONFIG =================
 st.set_page_config(page_title="Refund Tracker", page_icon="💰", layout="wide")
 
+# ================= STYLING =================
 st.markdown("""
 <style>
-.stApp { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
-.approve-box { background: #e8f5e9; border-left: 4px solid #2e7d32; padding: 1rem; border-radius: 10px; margin: 1rem 0; }
-.deny-box { background: #fee; border-left: 4px solid #c62828; padding: 1rem; border-radius: 10px; margin: 1rem 0; }
+.stApp {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+}
+.metric-box {
+    background: white;
+    padding: 15px;
+    border-radius: 12px;
+    text-align: center;
+}
 </style>
 """, unsafe_allow_html=True)
 
 st.title("💰 Refund Tracker Dashboard")
 st.markdown("### For Champs - Check BZID refund eligibility")
 
-st.info("Rule: < 3 refunds → APPROVE | ≥ 3 → DENY")
+st.info("📌 Rule: If total refunds < 3 → APPROVE | ≥ 3 → DENY")
 
 # ================= GOOGLE CONNECTION =================
 def get_client():
@@ -33,120 +39,121 @@ def get_client():
 
 # ================= LOAD DATA =================
 @st.cache_data(ttl=300)
-def load_cash():
+def load_cash_data():
     try:
         client = get_client()
         sheet = client.open_by_key(st.secrets["cash_upi_sheet_id"])
         ws = sheet.worksheet("Form Responses 1")
         return pd.DataFrame(ws.get_all_records())
     except Exception as e:
-        st.error(f"Cash/UPI Error: {e}")
+        st.error(f"❌ Cash/UPI Error: {e}")
         return pd.DataFrame()
 
 @st.cache_data(ttl=300)
-def load_jc():
+def load_jc_data():
     try:
         client = get_client()
         sheet = client.open_by_key(st.secrets["jumbocash_sheet_id"])
         ws = sheet.worksheet("Form Responses 1")
         return pd.DataFrame(ws.get_all_records())
     except Exception as e:
-        st.error(f"Jumbocash Error: {e}")
+        st.error(f"❌ Jumbocash Error: {e}")
         return pd.DataFrame()
 
-cash_df = load_cash()
-jc_df = load_jc()
+cash_df = load_cash_data()
+jc_df = load_jc_data()
 
 # ================= INPUT =================
 col1, col2 = st.columns(2)
 
 with col1:
-    bzid = st.text_input("Enter BZID")
+    bzid_input = st.text_input("🔍 Enter BZID")
 
 with col2:
-    months = {
-        "Jan":1,"Feb":2,"Mar":3,"Apr":4,"May":5,"Jun":6,
-        "Jul":7,"Aug":8,"Sep":9,"Oct":10,"Nov":11,"Dec":12
-    }
-    selected = st.selectbox("Select Month", [f"{m} 2026" for m in months.keys()])
-    month_text, year = selected.split()
-    month_num = months[month_text]
-    year = int(year)
+    month_input = st.selectbox("📅 Select Month", list(range(1, 13)))
 
-# ================= PROCESS =================
-if st.button("Fetch Refund Details"):
+# ================= MAIN LOGIC =================
+if st.button("🚀 Fetch Refund Details"):
 
-    if not bzid:
-        st.warning("Enter BZID")
+    if not bzid_input:
+        st.warning("⚠️ Please enter BZID")
         st.stop()
 
-    bzid = bzid.strip().upper()
+    bzid = bzid_input.strip().upper()
 
-    # ========= CASH / UPI =========
+    # ================= CASH FILTER =================
     cash_matches = pd.DataFrame()
 
     if not cash_df.empty:
-        cash_df["Date"] = pd.to_datetime(cash_df["Date"], errors='coerce')
+        cash_df["BZID_CLEAN"] = cash_df["Business ID"].astype(str).str.strip().str.upper()
+
+        cash_df["Date"] = pd.to_datetime(
+            cash_df["Date"],
+            errors="coerce"
+        )
 
         cash_matches = cash_df[
-            (cash_df["Business ID"].astype(str).str.strip().str.upper() == bzid) &
-            (cash_df["Date"].dt.month == month_num) &
-            (cash_df["Date"].dt.year == year)
+            (cash_df["BZID_CLEAN"] == bzid) &
+            (cash_df["Date"].notna()) &
+            (cash_df["Date"].dt.month == month_input)
         ]
 
-    # ========= JUMBOCASH =========
+    # ================= JUMBOCASH FILTER =================
     jc_matches = pd.DataFrame()
 
     if not jc_df.empty:
-        # USE Month column directly (most reliable)
+        jc_df["BZID_CLEAN"] = jc_df["BZID"].astype(str).str.strip().str.upper()
+
         jc_matches = jc_df[
-            (jc_df["BZID"].astype(str).str.strip().str.upper() == bzid) &
-            (jc_df["Month"].astype(int) == month_num)
+            (jc_df["BZID_CLEAN"] == bzid) &
+            (jc_df["Month"].astype(str).astype(int) == month_input)
         ]
 
     # ================= CALCULATIONS =================
     cash_count = cash_matches["Ticket Number"].nunique() if not cash_matches.empty else 0
     jc_count = jc_matches["Ticket ID"].nunique() if not jc_matches.empty else 0
 
-    cash_amount = cash_matches["Amount"].sum() if "Amount" in cash_matches else 0
-    jc_amount = jc_matches["Amount"].sum() if "Amount" in jc_matches else 0
+    cash_amount = cash_matches["Amount"].sum() if not cash_matches.empty else 0
+    jc_amount = jc_matches["Amount"].sum() if not jc_matches.empty else 0
 
     total_count = cash_count + jc_count
     total_amount = cash_amount + jc_amount
 
     # ================= METRICS =================
-    c1, c2, c3 = st.columns(3)
+    st.markdown("### 📊 Refund Summary")
 
-    c1.metric("Cash/UPI", cash_count, f"₹{cash_amount}")
-    c2.metric("Jumbocash", jc_count, f"₹{jc_amount}")
-    c3.metric("Total", total_count, f"₹{total_amount}")
+    m1, m2, m3 = st.columns(3)
+
+    with m1:
+        st.metric("💵 Cash / UPI", cash_count, f"₹ {cash_amount}")
+
+    with m2:
+        st.metric("🎫 Jumbocash", jc_count, f"₹ {jc_amount}")
+
+    with m3:
+        st.metric("📊 Total Refunds", total_count, f"₹ {total_amount}")
 
     # ================= DECISION =================
     if total_count < 3:
-        st.markdown(f"""
-        <div class="approve-box">
-        <h2>✅ APPROVE</h2>
-        <p>{total_count} refunds in selected month</p>
-        </div>
-        """, unsafe_allow_html=True)
+        st.success(f"✅ APPROVE — {total_count} refund(s)")
     else:
-        st.markdown(f"""
-        <div class="deny-box">
-        <h2>❌ DENY</h2>
-        <p>{total_count} refunds in selected month</p>
-        </div>
-        """, unsafe_allow_html=True)
+        st.error(f"❌ DENY — {total_count} refund(s)")
 
-    # ================= TABLE =================
-    st.subheader("Transactions")
+    # ================= TRANSACTIONS =================
+    st.markdown("### 📋 Transactions")
 
     if not cash_matches.empty:
-        st.write("Cash/UPI")
+        st.write("💵 Cash / UPI Refunds")
         st.dataframe(cash_matches)
 
     if not jc_matches.empty:
-        st.write("Jumbocash")
+        st.write("🎫 Jumbocash Refunds")
         st.dataframe(jc_matches)
 
     if cash_matches.empty and jc_matches.empty:
-        st.warning("No data found for this BZID in selected month")
+        st.warning("No data found for this BZID")
+
+    # ================= DEBUG =================
+    st.markdown("### 🧠 Debug Info (for issues)")
+    st.write("Cash rows found:", len(cash_matches))
+    st.write("Jumbocash rows found:", len(jc_matches))
