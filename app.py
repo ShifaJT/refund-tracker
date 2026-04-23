@@ -8,7 +8,7 @@ from datetime import datetime
 st.set_page_config(page_title="Refund Tracker", layout="wide")
 
 st.title("💰 Refund Tracker")
-st.info("Rule: <3 refunds → APPROVE | ≥3 → DENY")
+st.info("Rule: ≤5 refunds → APPROVE | ≥6 → DENY")
 
 # ================= GOOGLE AUTH =================
 @st.cache_resource
@@ -23,22 +23,18 @@ def get_client():
     return gspread.authorize(creds)
 
 # ================= LOAD DATA =================
-@st.cache_data(ttl=600)
+@st.cache_data
 def load_sheet(sheet_id):
     client = get_client()
     sheet = client.open_by_key(sheet_id)
     ws = sheet.worksheet("Form Responses 1")
     return pd.DataFrame(ws.get_all_records())
 
-cash_df = load_sheet(st.secrets["cash_upi_sheet_id"])
-jc_df = load_sheet(st.secrets["jumbocash_sheet_id"])
-
 # ================= INPUT =================
 col1, col2 = st.columns(2)
 
 bzid_input = col1.text_input("Enter BZID")
 
-# Month dropdown (January 2026 format)
 month_options = {
     datetime(2026, i, 1).strftime("%B 2026"): i for i in range(1, 13)
 }
@@ -48,6 +44,12 @@ month_input = month_options[selected_month_label]
 
 # ================= PROCESS =================
 if st.button("Fetch Details"):
+
+    # 🔥 FORCE REFRESH (fix delay issue)
+    st.cache_data.clear()
+
+    cash_df = load_sheet(st.secrets["cash_upi_sheet_id"])
+    jc_df = load_sheet(st.secrets["jumbocash_sheet_id"])
 
     if not bzid_input:
         st.warning("Enter BZID")
@@ -101,8 +103,8 @@ if st.button("Fetch Details"):
     c2.metric("Jumbocash", jc_count, f"₹ {jc_amount}")
     c3.metric("Total", total_count, f"₹ {total_amount}")
 
-    # ===== DECISION =====
-    if total_count < 3:
+    # ===== DECISION (UPDATED RULE) =====
+    if total_count < 6:
         st.success(f"✅ APPROVE ({total_count})")
     else:
         st.error(f"❌ DENY ({total_count})")
