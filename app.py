@@ -22,15 +22,19 @@ def get_client():
     )
     return gspread.authorize(creds)
 
-# ================= LOAD DATA =================
-@st.cache_data(ttl=300)  # 5 min cache (fast + near real-time)
+# ================= LOAD DATA (FASTER) =================
+@st.cache_data(ttl=300)  # 5 min cache
 def load_sheet(sheet_id, sheet_name):
     client = get_client()
     sheet = client.open_by_key(sheet_id)
     ws = sheet.worksheet(sheet_name)
-    return pd.DataFrame(ws.get_all_records())
 
-# ================= REFRESH BUTTON =================
+    data = ws.get_all_values()
+    df = pd.DataFrame(data[1:], columns=data[0])
+
+    return df
+
+# ================= REFRESH =================
 if st.button("🔄 Refresh Data"):
     st.cache_data.clear()
     st.rerun()
@@ -47,6 +51,9 @@ month_options = {
 selected_month_label = col2.selectbox("Select Month", list(month_options.keys()))
 month_input = month_options[selected_month_label]
 
+# Month short name for manual sheet (Apr, May etc.)
+month_short = selected_month_label[:3]
+
 # ================= PROCESS =================
 if st.button("Fetch Details"):
 
@@ -56,10 +63,10 @@ if st.button("Fetch Details"):
 
     bzid = bzid_input.strip().upper()
 
-    # ===== LOAD DATA =====
+    # ===== LOAD SHEETS =====
     cash_df = load_sheet(st.secrets["cash_upi_sheet_id"], "Form Responses 1")
     jc_df = load_sheet(st.secrets["jumbocash_sheet_id"], "Form Responses 1")
-    manual_cash_df = load_sheet(st.secrets["cash_upi_sheet_id"], "cash refund")
+    manual_df = load_sheet(st.secrets["cash_upi_sheet_id"], "cash refund")
 
     # ================= CASH / UPI =================
     cash_df["BZID"] = cash_df["Business ID"].astype(str).str.strip().str.upper()
@@ -88,24 +95,26 @@ if st.button("Fetch Details"):
     ]
 
     # ================= MANUAL CASH =================
-    manual_cash_df["BZID"] = manual_cash_df["BZID"].astype(str).str.strip().str.upper()
+    manual_df["BZID"] = manual_df["BZID"].astype(str).str.strip().str.upper()
 
-    manual_cash_df["Date"] = pd.to_datetime(manual_cash_df["Date"], errors="coerce")
+    manual_df["Date"] = pd.to_datetime(manual_df["Date"], errors="coerce")
 
-    manual_matches = manual_cash_df[
-        (manual_cash_df["BZID"] == bzid) &
-        (manual_cash_df["Date"].notna()) &
-        (manual_cash_df["Date"].dt.month == month_input)
+    manual_matches = manual_df[
+        (manual_df["BZID"] == bzid) &
+        (
+            (manual_df["Date"].dt.month == month_input) |
+            (manual_df["Month"].astype(str).str.contains(month_short, case=False, na=False))
+        )
     ]
 
-    # ================= COUNTS =================
+    # ================= CALCULATIONS =================
     cash_count = cash_matches["Ticket Number"].nunique() if not cash_matches.empty else 0
     jc_count = jc_matches["Ticket ID"].nunique() if not jc_matches.empty else 0
-    manual_count = manual_matches["Ticke No"].nunique() if not manual_matches.empty else 0
+    manual_count = manual_matches["Ticket No"].nunique() if not manual_matches.empty else 0
 
-    cash_amount = cash_matches["Amount"].sum() if not cash_matches.empty else 0
-    jc_amount = jc_matches["Amount"].sum() if not jc_matches.empty else 0
-    manual_amount = manual_matches["Amount"].sum() if not manual_matches.empty else 0
+    cash_amount = pd.to_numeric(cash_matches["Amount"], errors="coerce").sum() if not cash_matches.empty else 0
+    jc_amount = pd.to_numeric(jc_matches["Amount"], errors="coerce").sum() if not jc_matches.empty else 0
+    manual_amount = pd.to_numeric(manual_matches["Amount"], errors="coerce").sum() if not manual_matches.empty else 0
 
     total_count = cash_count + jc_count + manual_count
     total_amount = cash_amount + jc_amount + manual_amount
@@ -114,10 +123,10 @@ if st.button("Fetch Details"):
     st.subheader("Summary")
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Cash / UPI", cash_count, f"₹ {cash_amount}")
-    c2.metric("Jumbocash", jc_count, f"₹ {jc_amount}")
-    c3.metric("Manual Cash", manual_count, f"₹ {manual_amount}")
-    c4.metric("Total", total_count, f"₹ {total_amount}")
+    c1.metric("Cash / UPI", cash_count, f"₹ {round(cash_amount,2)}")
+    c2.metric("Jumbocash", jc_count, f"₹ {round(jc_amount,2)}")
+    c3.metric("Manual Cash", manual_count, f"₹ {round(manual_amount,2)}")
+    c4.metric("Total", total_count, f"₹ {round(total_amount,2)}")
 
     # ================= DECISION =================
     if total_count < 6:
