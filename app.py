@@ -22,6 +22,22 @@ def get_client():
     )
     return gspread.authorize(creds)
 
+# ================= FIX DUPLICATE COLUMNS =================
+def fix_duplicate_columns(df):
+    cols = []
+    count = {}
+
+    for col in df.columns:
+        if col in count:
+            count[col] += 1
+            cols.append(f"{col}_{count[col]}")
+        else:
+            count[col] = 0
+            cols.append(col)
+
+    df.columns = cols
+    return df
+
 # ================= LOAD DATA (FASTER) =================
 @st.cache_data(ttl=300)  # 5 min cache
 def load_sheet(sheet_id, sheet_name):
@@ -30,7 +46,12 @@ def load_sheet(sheet_id, sheet_name):
     ws = sheet.worksheet(sheet_name)
 
     data = ws.get_all_values()
+
+    # CREATE DATAFRAME
     df = pd.DataFrame(data[1:], columns=data[0])
+
+    # FIX DUPLICATE HEADERS
+    df = fix_duplicate_columns(df)
 
     return df
 
@@ -137,15 +158,24 @@ if st.button("Fetch Details"):
     # ================= TABLES =================
     if not cash_matches.empty:
         st.write("Cash / UPI")
-        st.dataframe(cash_matches, use_container_width=True)
+        st.dataframe(
+            cash_matches.reset_index(drop=True),
+            use_container_width=True
+        )
 
     if not jc_matches.empty:
         st.write("Jumbocash")
-        st.dataframe(jc_matches, use_container_width=True)
+        st.dataframe(
+            jc_matches.reset_index(drop=True),
+            use_container_width=True
+        )
 
     if not manual_matches.empty:
         st.write("Manual Cash Refund")
-        st.dataframe(manual_matches, use_container_width=True)
+        st.dataframe(
+            manual_matches.reset_index(drop=True),
+            use_container_width=True
+        )
 
     if cash_matches.empty and jc_matches.empty and manual_matches.empty:
         st.warning("No data found")
