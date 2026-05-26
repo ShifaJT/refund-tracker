@@ -8,7 +8,7 @@ from datetime import datetime
 st.set_page_config(page_title="Refund Tracker", layout="wide")
 
 st.title("💰 Refund Tracker")
-st.info("Rule: ≤5 refunds → APPROVE | ≥6 → DENY")
+st.info("Rule: <5 refunds → APPROVE | ≥5 → DENY")
 
 # ================= GOOGLE AUTH =================
 @st.cache_resource
@@ -150,7 +150,7 @@ if st.button("Fetch Details"):
     c4.metric("Total", total_count, f"₹ {round(total_amount,2)}")
 
     # ================= DECISION =================
-    if total_count < 6:
+    if total_count < 5:
         st.success(f"✅ APPROVE ({total_count})")
     else:
         st.error(f"❌ DENY ({total_count})")
