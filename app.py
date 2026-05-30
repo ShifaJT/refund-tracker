@@ -8,7 +8,7 @@ from datetime import datetime
 st.set_page_config(page_title="Refund Tracker", layout="wide")
 
 st.title("💰 Refund Tracker")
-st.info("Rule: <5 refunds → APPROVE | ≥5 → DENY")
+st.info("Rule: Up to 5 refunds → APPROVE | 6 or more refunds → DENY")
 
 # ================= GOOGLE AUTH =================
 @st.cache_resource
@@ -104,30 +104,28 @@ if st.button("Fetch Details"):
     ]
 
     # ================= JUMBOCASH =================
-    # ================= JUMBOCASH =================
+    jc_df.columns = jc_df.columns.str.strip()
 
-jc_df.columns = jc_df.columns.str.strip()
+    jc_df["BZID"] = jc_df["BZID"].astype(str).str.strip().str.upper()
 
-jc_df["BZID"] = jc_df["BZID"].astype(str).str.strip().str.upper()
+    # Handle date safely
+    if "date" in jc_df.columns:
+        jc_df["Date"] = pd.to_datetime(jc_df["date"], errors="coerce")
+    elif "Date" in jc_df.columns:
+        jc_df["Date"] = pd.to_datetime(jc_df["Date"], errors="coerce")
+    else:
+        jc_df["Date"] = pd.NaT
 
-# Handle date safely
-if "date" in jc_df.columns:
-    jc_df["Date"] = pd.to_datetime(jc_df["date"], errors="coerce")
-elif "Date" in jc_df.columns:
-    jc_df["Date"] = pd.to_datetime(jc_df["Date"], errors="coerce")
-else:
-    jc_df["Date"] = pd.NaT
+    if "Timestamp" in jc_df.columns:
+        jc_df["Date"] = jc_df["Date"].fillna(
+            pd.to_datetime(jc_df["Timestamp"], errors="coerce")
+        )
 
-if "Timestamp" in jc_df.columns:
-    jc_df["Date"] = jc_df["Date"].fillna(
-        pd.to_datetime(jc_df["Timestamp"], errors="coerce")
-    )
-
-jc_matches = jc_df[
-    (jc_df["BZID"] == bzid) &
-    (jc_df["Date"].notna()) &
-    (jc_df["Date"].dt.month == month_input)
-]
+    jc_matches = jc_df[
+        (jc_df["BZID"] == bzid) &
+        (jc_df["Date"].notna()) &
+        (jc_df["Date"].dt.month == month_input)
+    ]
 
     # ================= MANUAL CASH =================
     manual_df["BZID"] = manual_df["BZID"].astype(str).str.strip().str.upper()
