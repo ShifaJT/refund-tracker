@@ -39,7 +39,7 @@ def fix_duplicate_columns(df):
     return df
 
 # ================= LOAD DATA (FASTER) =================
-@st.cache_data(ttl=300)  # 5 min cache
+@st.cache_data(ttl=60)
 def load_sheet(sheet_id, sheet_name):
     client = get_client()
     sheet = client.open_by_key(sheet_id)
@@ -47,10 +47,11 @@ def load_sheet(sheet_id, sheet_name):
 
     data = ws.get_all_values()
 
-    # CREATE DATAFRAME
     df = pd.DataFrame(data[1:], columns=data[0])
 
-    # FIX DUPLICATE HEADERS
+    # remove hidden spaces
+    df.columns = df.columns.str.strip()
+
     df = fix_duplicate_columns(df)
 
     return df
@@ -103,17 +104,30 @@ if st.button("Fetch Details"):
     ]
 
     # ================= JUMBOCASH =================
-    jc_df["BZID"] = jc_df["BZID"].astype(str).str.strip().str.upper()
+    # ================= JUMBOCASH =================
 
-    jc_df["Date"] = pd.to_datetime(
-        jc_df["date"], errors="coerce"
-    ).fillna(pd.to_datetime(jc_df["Timestamp"], errors="coerce"))
+jc_df.columns = jc_df.columns.str.strip()
 
-    jc_matches = jc_df[
-        (jc_df["BZID"] == bzid) &
-        (jc_df["Date"].notna()) &
-        (jc_df["Date"].dt.month == month_input)
-    ]
+jc_df["BZID"] = jc_df["BZID"].astype(str).str.strip().str.upper()
+
+# Handle date safely
+if "date" in jc_df.columns:
+    jc_df["Date"] = pd.to_datetime(jc_df["date"], errors="coerce")
+elif "Date" in jc_df.columns:
+    jc_df["Date"] = pd.to_datetime(jc_df["Date"], errors="coerce")
+else:
+    jc_df["Date"] = pd.NaT
+
+if "Timestamp" in jc_df.columns:
+    jc_df["Date"] = jc_df["Date"].fillna(
+        pd.to_datetime(jc_df["Timestamp"], errors="coerce")
+    )
+
+jc_matches = jc_df[
+    (jc_df["BZID"] == bzid) &
+    (jc_df["Date"].notna()) &
+    (jc_df["Date"].dt.month == month_input)
+]
 
     # ================= MANUAL CASH =================
     manual_df["BZID"] = manual_df["BZID"].astype(str).str.strip().str.upper()
@@ -150,10 +164,10 @@ if st.button("Fetch Details"):
     c4.metric("Total", total_count, f"₹ {round(total_amount,2)}")
 
     # ================= DECISION =================
-    if total_count < 5:
-        st.success(f"✅ APPROVE ({total_count})")
-    else:
-        st.error(f"❌ DENY ({total_count})")
+    if total_count <= 5:
+    st.success(f"✅ APPROVE ({total_count})")
+else:
+    st.error(f"❌ DENY ({total_count})")
 
     # ================= TABLES =================
     if not cash_matches.empty:
