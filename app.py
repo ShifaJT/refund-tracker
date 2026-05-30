@@ -163,9 +163,9 @@ if st.button("Fetch Details"):
 
     # ================= DECISION =================
     if total_count <= 5:
-    st.success(f"✅ APPROVE ({total_count})")
-else:
-    st.error(f"❌ DENY ({total_count})")
+        st.success(f"✅ APPROVE ({total_count})")
+    else:
+        st.error(f"❌ DENY ({total_count})")
 
     # ================= TABLES =================
     if not cash_matches.empty:
