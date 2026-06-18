@@ -52,6 +52,9 @@ st.markdown("""
         margin-top: 30px;
         margin-bottom: 20px;
     }
+    .details-tabs {
+        margin-top: 10px;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -139,6 +142,7 @@ def get_refund_count_for_year(df, bzid, year):
 def get_monthly_counts(df, bzid, year):
     """Get refund counts for each month of a year"""
     monthly_counts = []
+    month_names = []
     for month in range(1, 13):
         month_data = df[
             (df["BZID"] == bzid) &
@@ -158,7 +162,8 @@ def get_monthly_counts(df, bzid, year):
                 monthly_counts.append(len(month_data))
         else:
             monthly_counts.append(0)
-    return monthly_counts
+        month_names.append(datetime(year, month, 1).strftime("%B"))
+    return month_names, monthly_counts
 
 # ================= REFRESH =================
 if st.button("🔄 Refresh Data"):
@@ -499,68 +504,109 @@ if st.button("Fetch Details"):
         last_year_count = get_refund_count_for_year(all_refunds, bzid, current_year - 1)
         
         # Get monthly counts for current year
-        monthly_counts = get_monthly_counts(all_refunds, bzid, current_year)
+        month_names, monthly_counts = get_monthly_counts(all_refunds, bzid, current_year)
 
     # =====================================================
-    # DISPLAY SECTION 1: Current Month Summary
+    # MAIN LAYOUT: Left Column (Decision) & Right Column (Details)
     # =====================================================
     
-    st.markdown(f"## 📊 Current Month Summary")
-    st.markdown(f"### {selected_month_label}")
-
-    # Decision Card
-    if total_count_current <= 5:
-        st.markdown(f"""
-        <div class="decision-approve">
-            <h2 style="color: #28a745; margin: 0;">✅ APPROVED</h2>
-            <p style="font-size: 18px; margin: 5px 0;">Total Refunds: {total_count_current} (Within limit of 5)</p>
-        </div>
-        """, unsafe_allow_html=True)
-    else:
-        st.markdown(f"""
-        <div class="decision-deny">
-            <h2 style="color: #dc3545; margin: 0;">❌ DENIED</h2>
-            <p style="font-size: 18px; margin: 5px 0;">Total Refunds: {total_count_current} (Exceeds limit of 5)</p>
-        </div>
-        """, unsafe_allow_html=True)
-
-    # Metrics in 4 columns
-    col1, col2, col3, col4 = st.columns(4)
-
-    with col1:
-        st.metric(
-            label="💳 Cash / UPI",
-            value=cash_count_current,
-            delta=f"₹{round(cash_amount_current, 2)}",
-            delta_color="off"
-        )
+    col_left, col_right = st.columns([1, 1])
     
-    with col2:
-        st.metric(
-            label="🏦 Jumbocash",
-            value=jc_count_current,
-            delta=f"₹{round(jc_amount_current, 2)}",
-            delta_color="off"
-        )
+    with col_left:
+        # ========== LEFT COLUMN: Current Month Summary & Decision ==========
+        st.markdown(f"## 📊 Current Month")
+        st.markdown(f"### {selected_month_label}")
+
+        # Decision Card
+        if total_count_current <= 5:
+            st.markdown(f"""
+            <div class="decision-approve">
+                <h2 style="color: #28a745; margin: 0;">✅ APPROVED</h2>
+                <p style="font-size: 18px; margin: 5px 0;">Total Refunds: {total_count_current} (Within limit of 5)</p>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown(f"""
+            <div class="decision-deny">
+                <h2 style="color: #dc3545; margin: 0;">❌ DENIED</h2>
+                <p style="font-size: 18px; margin: 5px 0;">Total Refunds: {total_count_current} (Exceeds limit of 5)</p>
+            </div>
+            """, unsafe_allow_html=True)
+
+        # Metrics in 2x2 grid
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric(
+                label="💳 Cash / UPI",
+                value=cash_count_current,
+                delta=f"₹{round(cash_amount_current, 2)}",
+                delta_color="off"
+            )
+        
+        with col2:
+            st.metric(
+                label="🏦 Jumbocash",
+                value=jc_count_current,
+                delta=f"₹{round(jc_amount_current, 2)}",
+                delta_color="off"
+            )
+        
+        col3, col4 = st.columns(2)
+        with col3:
+            st.metric(
+                label="💵 Manual Cash",
+                value=manual_count_current,
+                delta=f"₹{round(manual_amount_current, 2)}",
+                delta_color="off"
+            )
+        
+        with col4:
+            st.metric(
+                label="📦 Total",
+                value=total_count_current,
+                delta=f"₹{round(total_amount_current, 2)}",
+                delta_color="off"
+            )
     
-    with col3:
-        st.metric(
-            label="💵 Manual Cash",
-            value=manual_count_current,
-            delta=f"₹{round(manual_amount_current, 2)}",
-            delta_color="off"
-        )
-    
-    with col4:
-        st.metric(
-            label="📦 Total",
-            value=total_count_current,
-            delta=f"₹{round(total_amount_current, 2)}",
-            delta_color="off"
-        )
+    with col_right:
+        # ========== RIGHT COLUMN: Refund Details Tabs ==========
+        st.markdown(f"## 📋 Refund Details")
+        st.markdown(f"### {selected_month_label}")
+        
+        tabs = st.tabs(["💳 Cash/UPI", "🏦 Jumbocash", "💵 Manual Cash"])
+        
+        with tabs[0]:
+            if not cash_current_matches.empty:
+                st.dataframe(
+                    cash_current_matches.reset_index(drop=True),
+                    use_container_width=True,
+                    height=300
+                )
+            else:
+                st.info("No Cash/UPI refunds for this month")
+        
+        with tabs[1]:
+            if not jc_current_matches.empty:
+                st.dataframe(
+                    jc_current_matches.reset_index(drop=True),
+                    use_container_width=True,
+                    height=300
+                )
+            else:
+                st.info("No Jumbocash refunds for this month")
+        
+        with tabs[2]:
+            if not manual_current_matches.empty:
+                st.dataframe(
+                    manual_current_matches.reset_index(drop=True),
+                    use_container_width=True,
+                    height=300
+                )
+            else:
+                st.info("No Manual Cash refunds for this month")
 
     # =====================================================
-    # DISPLAY SECTION 2: Yearly Trend
+    # DISPLAY SECTION: Yearly Trend (Full Width)
     # =====================================================
     
     st.markdown("---")
@@ -608,64 +654,27 @@ if st.button("Fetch Details"):
         </div>
         """, unsafe_allow_html=True)
 
-    # Monthly breakdown chart
-    st.markdown("### 📅 Monthly Distribution")
+    # Monthly breakdown as a clean table
+    st.markdown("### 📅 Monthly Breakdown")
     
-    # Create month names
-    month_names = [datetime(current_year, i, 1).strftime("%b") for i in range(1, 13)]
-    
-    # Display as bar chart with better styling
-    trend_df = pd.DataFrame({
-        "Month": month_names,
-        "Refunds": monthly_counts
-    })
-    
-    # Highlight current month
-    colors = ['#667eea' if i != month_input-1 else '#f5576c' for i in range(12)]
-    
-    st.bar_chart(trend_df.set_index("Month"), use_container_width=True)
-    
-    # Add monthly summary table
-    with st.expander("📊 View Monthly Details"):
-        monthly_detail_df = pd.DataFrame({
-            "Month": month_names,
-            "Refund Count": monthly_counts,
-            "Status": ["Current Month" if i == month_input-1 else "" for i in range(12)]
+    # Create a clean monthly breakdown table
+    monthly_data = []
+    for i, month in enumerate(month_names):
+        status = "📍 Current" if i == month_input - 1 else ""
+        monthly_data.append({
+            "Month": month,
+            "Refunds": monthly_counts[i],
+            "Status": status
         })
-        st.dataframe(monthly_detail_df, use_container_width=True)
-
-    # =====================================================
-    # DISPLAY SECTION 3: Current Month Details
-    # =====================================================
     
-    st.markdown("---")
-    st.markdown(f"## 📋 Refund Details - {selected_month_label}")
+    monthly_df = pd.DataFrame(monthly_data)
     
-    tabs = st.tabs(["💳 Cash/UPI", "🏦 Jumbocash", "💵 Manual Cash"])
-    
-    with tabs[0]:
-        if not cash_current_matches.empty:
-            st.dataframe(
-                cash_current_matches.reset_index(drop=True),
-                use_container_width=True
-            )
-        else:
-            st.info("No Cash/UPI refunds for this month")
-    
-    with tabs[1]:
-        if not jc_current_matches.empty:
-            st.dataframe(
-                jc_current_matches.reset_index(drop=True),
-                use_container_width=True
-            )
-        else:
-            st.info("No Jumbocash refunds for this month")
-    
-    with tabs[2]:
-        if not manual_current_matches.empty:
-            st.dataframe(
-                manual_current_matches.reset_index(drop=True),
-                use_container_width=True
-            )
-        else:
-            st.info("No Manual Cash refunds for this month")
+    # Highlight current month with color
+    st.dataframe(
+        monthly_df.style.applymap(
+            lambda x: 'background-color: #e3f2fd' if x == '📍 Current' else '',
+            subset=['Status']
+        ),
+        use_container_width=True,
+        hide_index=True
+    )
