@@ -69,6 +69,28 @@ def load_sheet(sheet_id, sheet_name):
     return df
 
 
+# ================= GET REFUND COUNT FOR YEAR =================
+def get_refund_count_for_year(df, bzid, year):
+    """Get unique refund count for a specific year"""
+    if df.empty:
+        return 0
+    
+    df_filtered = df[
+        (df["BZID"] == bzid) &
+        (df["Date"].notna()) &
+        (df["Date"].dt.year == year)
+    ]
+    
+    # Try to get unique count based on ticket column
+    ticket_cols = ["Ticket Number", "Ticket ID", "Ticket No"]
+    for col in ticket_cols:
+        if col in df_filtered.columns:
+            return df_filtered[col].nunique()
+    
+    # If no ticket column, return count of rows
+    return len(df_filtered)
+
+
 # ================= REFRESH =================
 if st.button("🔄 Refresh Data"):
 
@@ -128,7 +150,7 @@ if st.button("Fetch Details"):
     )
 
     # =====================================================
-    # CASH / UPI
+    # CASH / UPI - Clean and prepare data
     # =====================================================
 
     cash_df["BZID"] = (
@@ -152,7 +174,8 @@ if st.button("Fetch Details"):
             )
         )
 
-    cash_matches = cash_df[
+    # Current month matches (for approval/rejection)
+    cash_current_matches = cash_df[
 
         (cash_df["BZID"] == bzid)
 
@@ -171,7 +194,7 @@ if st.button("Fetch Details"):
     ]
 
     # =====================================================
-    # JUMBOCASH
+    # JUMBOCASH - Clean and prepare data
     # =====================================================
 
     jc_df.columns = jc_df.columns.str.strip()
@@ -226,7 +249,7 @@ if st.button("Fetch Details"):
 
         )
 
-    jc_matches = jc_df[
+    jc_current_matches = jc_df[
 
         (jc_df["BZID"] == bzid)
 
@@ -245,7 +268,7 @@ if st.button("Fetch Details"):
     ]
 
     # =====================================================
-    # MANUAL CASH
+    # MANUAL CASH - Clean and prepare data
     # =====================================================
 
     manual_df["BZID"] = (
@@ -282,7 +305,7 @@ if st.button("Fetch Details"):
 
         )
 
-    manual_matches = manual_df[
+    manual_current_matches = manual_df[
 
         (manual_df["BZID"] == bzid)
 
@@ -301,100 +324,115 @@ if st.button("Fetch Details"):
     ]
 
     # =====================================================
-    # COUNTS
+    # COUNTS FOR CURRENT MONTH (Decision)
     # =====================================================
 
-    cash_count = (
+    cash_count_current = (
 
-        cash_matches["Ticket Number"].nunique()
+        cash_current_matches["Ticket Number"].nunique()
 
-        if not cash_matches.empty
+        if not cash_current_matches.empty
 
         else 0
 
     )
 
-    jc_count = (
+    jc_count_current = (
 
-        jc_matches["Ticket ID"].nunique()
+        jc_current_matches["Ticket ID"].nunique()
 
-        if not jc_matches.empty
-
-        else 0
-
-    )
-
-    manual_count = (
-
-        manual_matches["Ticket No"].nunique()
-
-        if not manual_matches.empty
+        if not jc_current_matches.empty
 
         else 0
 
     )
 
+    manual_count_current = (
+
+        manual_current_matches["Ticket No"].nunique()
+
+        if not manual_current_matches.empty
+
+        else 0
+
+    )
+
+    total_count_current = cash_count_current + jc_count_current + manual_count_current
+
     # =====================================================
-    # AMOUNTS
+    # AMOUNTS FOR CURRENT MONTH
     # =====================================================
 
-    cash_amount = (
+    cash_amount_current = (
 
         pd.to_numeric(
 
-            cash_matches["Amount"],
+            cash_current_matches["Amount"],
 
             errors="coerce"
 
         ).sum()
 
-        if not cash_matches.empty
+        if not cash_current_matches.empty
 
         else 0
 
     )
 
-    jc_amount = (
+    jc_amount_current = (
 
         pd.to_numeric(
 
-            jc_matches["Amount"],
+            jc_current_matches["Amount"],
 
             errors="coerce"
 
         ).sum()
 
-        if not jc_matches.empty
+        if not jc_current_matches.empty
 
         else 0
 
     )
 
-    manual_amount = (
+    manual_amount_current = (
 
         pd.to_numeric(
 
-            manual_matches["Amount"],
+            manual_current_matches["Amount"],
 
             errors="coerce"
 
         ).sum()
 
-        if not manual_matches.empty
+        if not manual_current_matches.empty
 
         else 0
 
     )
 
-    total_count = cash_count + jc_count + manual_count
-
-    total_amount = cash_amount + jc_amount + manual_amount
+    total_amount_current = cash_amount_current + jc_amount_current + manual_amount_current
 
     # =====================================================
-    # SUMMARY
+    # GET YEARLY TREND DATA
+    # =====================================================
+    
+    # Combine all dataframes for yearly trend analysis
+    all_refunds = pd.concat([
+        cash_df[["BZID", "Date"]],
+        jc_df[["BZID", "Date"]],
+        manual_df[["BZID", "Date"]]
+    ], ignore_index=True)
+    
+    # Get refund counts for current year and last year
+    current_year_count = get_refund_count_for_year(all_refunds, bzid, current_year)
+    last_year_count = get_refund_count_for_year(all_refunds, bzid, current_year - 1)
+
+    # =====================================================
+    # SUMMARY - Current Month (for decision)
     # =====================================================
 
-    st.subheader("Summary")
+    st.subheader(f"📊 Current Month Summary - {selected_month_label}")
 
     c1, c2, c3, c4 = st.columns(4)
 
@@ -402,9 +440,9 @@ if st.button("Fetch Details"):
 
         "Cash / UPI",
 
-        cash_count,
+        cash_count_current,
 
-        f"₹ {round(cash_amount,2)}"
+        f"₹ {round(cash_amount_current,2)}"
 
     )
 
@@ -412,9 +450,9 @@ if st.button("Fetch Details"):
 
         "Jumbocash",
 
-        jc_count,
+        jc_count_current,
 
-        f"₹ {round(jc_amount,2)}"
+        f"₹ {round(jc_amount_current,2)}"
 
     )
 
@@ -422,9 +460,9 @@ if st.button("Fetch Details"):
 
         "Manual Cash",
 
-        manual_count,
+        manual_count_current,
 
-        f"₹ {round(manual_amount,2)}"
+        f"₹ {round(manual_amount_current,2)}"
 
     )
 
@@ -432,59 +470,109 @@ if st.button("Fetch Details"):
 
         "Total",
 
-        total_count,
+        total_count_current,
 
-        f"₹ {round(total_amount,2)}"
+        f"₹ {round(total_amount_current,2)}"
 
     )
 
     # =====================================================
-    # DECISION
+    # DECISION (based only on current month)
     # =====================================================
 
-    if total_count <= 5:
+    if total_count_current <= 5:
 
-        st.success(f"✅ APPROVE ({total_count})")
+        st.success(f"✅ APPROVE ({total_count_current} refunds this month)")
 
     else:
 
-        st.error(f"❌ DENY ({total_count})")
+        st.error(f"❌ DENY ({total_count_current} refunds this month)")
 
     # =====================================================
-    # TABLES
+    # YEARLY TREND DISPLAY
     # =====================================================
+    
+    st.subheader("📈 Refund Trend (Last 2 Years)")
+    
+    trend_col1, trend_col2 = st.columns(2)
+    
+    with trend_col1:
+        st.metric(
+            f"Total Refunds in {current_year}",
+            current_year_count,
+            delta=f"Current Year"
+        )
+    
+    with trend_col2:
+        st.metric(
+            f"Total Refunds in {current_year - 1}",
+            last_year_count,
+            delta=f"Previous Year"
+        )
+    
+    # Show monthly breakdown for current year
+    st.write("### 📅 Monthly Breakdown for Current Year")
+    
+    # Get monthly counts for current year
+    monthly_counts = []
+    for month in range(1, 13):
+        month_count = get_refund_count_for_year(all_refunds, bzid, current_year)
+        # Actually we need monthly breakdown - let's filter differently
+        month_data = all_refunds[
+            (all_refunds["BZID"] == bzid) &
+            (all_refunds["Date"].dt.year == current_year) &
+            (all_refunds["Date"].dt.month == month)
+        ]
+        monthly_counts.append(len(month_data))
+    
+    # Create month names
+    month_names = [datetime(current_year, i, 1).strftime("%b") for i in range(1, 13)]
+    
+    # Display as bar chart
+    trend_df = pd.DataFrame({
+        "Month": month_names,
+        "Refund Count": monthly_counts
+    })
+    
+    st.bar_chart(trend_df.set_index("Month"))
 
-    if not cash_matches.empty:
+    # =====================================================
+    # TABLES - Current Month Details
+    # =====================================================
+    
+    st.subheader("📋 Current Month Refund Details")
+
+    if not cash_current_matches.empty:
 
         st.write("Cash / UPI")
 
         st.dataframe(
 
-            cash_matches.reset_index(drop=True),
+            cash_current_matches.reset_index(drop=True),
 
             use_container_width=True
 
         )
 
-    if not jc_matches.empty:
+    if not jc_current_matches.empty:
 
         st.write("Jumbocash")
 
         st.dataframe(
 
-            jc_matches.reset_index(drop=True),
+            jc_current_matches.reset_index(drop=True),
 
             use_container_width=True
 
         )
 
-    if not manual_matches.empty:
+    if not manual_current_matches.empty:
 
         st.write("Manual Cash Refund")
 
         st.dataframe(
 
-            manual_matches.reset_index(drop=True),
+            manual_current_matches.reset_index(drop=True),
 
             use_container_width=True
 
@@ -492,12 +580,12 @@ if st.button("Fetch Details"):
 
     if (
 
-        cash_matches.empty
+        cash_current_matches.empty
 
-        and jc_matches.empty
+        and jc_current_matches.empty
 
-        and manual_matches.empty
+        and manual_current_matches.empty
 
     ):
 
-        st.warning("No data found")
+        st.warning("No refund data found for the selected month")
