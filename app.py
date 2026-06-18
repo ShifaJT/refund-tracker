@@ -13,6 +13,7 @@ st.info("Rule: Up to 5 refunds → APPROVE | 6 or more refunds → DENY")
 # ================= GOOGLE AUTH =================
 @st.cache_resource
 def get_client():
+
     creds = Credentials.from_service_account_info(
         st.secrets["gcp_service_account"],
         scopes=[
@@ -20,174 +21,483 @@ def get_client():
             "https://www.googleapis.com/auth/drive"
         ],
     )
+
     return gspread.authorize(creds)
+
 
 # ================= FIX DUPLICATE COLUMNS =================
 def fix_duplicate_columns(df):
+
     cols = []
     count = {}
 
     for col in df.columns:
+
         if col in count:
+
             count[col] += 1
             cols.append(f"{col}_{count[col]}")
+
         else:
+
             count[col] = 0
             cols.append(col)
 
     df.columns = cols
+
     return df
 
-# ================= LOAD DATA (FASTER) =================
+
+# ================= LOAD SHEETS =================
 @st.cache_data(ttl=60)
 def load_sheet(sheet_id, sheet_name):
+
     client = get_client()
+
     sheet = client.open_by_key(sheet_id)
+
     ws = sheet.worksheet(sheet_name)
 
     data = ws.get_all_values()
 
     df = pd.DataFrame(data[1:], columns=data[0])
 
-    # remove hidden spaces
     df.columns = df.columns.str.strip()
 
     df = fix_duplicate_columns(df)
 
     return df
 
+
 # ================= REFRESH =================
 if st.button("🔄 Refresh Data"):
+
     st.cache_data.clear()
+
     st.rerun()
+
 
 # ================= INPUT =================
 col1, col2 = st.columns(2)
 
 bzid_input = col1.text_input("Enter BZID")
 
+current_year = datetime.now().year
+
 month_options = {
-    datetime(2026, i, 1).strftime("%B 2026"): i for i in range(1, 13)
+    datetime(current_year, i, 1).strftime("%B %Y"): i
+    for i in range(1, 13)
 }
 
-selected_month_label = col2.selectbox("Select Month", list(month_options.keys()))
+selected_month_label = col2.selectbox(
+    "Select Month",
+    list(month_options.keys())
+)
+
 month_input = month_options[selected_month_label]
 
-# Month short name for manual sheet (Apr, May etc.)
-month_short = selected_month_label[:3]
+selected_year = int(selected_month_label.split()[-1])
+
 
 # ================= PROCESS =================
 if st.button("Fetch Details"):
 
     if not bzid_input:
+
         st.warning("Enter BZID")
+
         st.stop()
 
     bzid = bzid_input.strip().upper()
 
-    # ===== LOAD SHEETS =====
-    cash_df = load_sheet(st.secrets["cash_upi_sheet_id"], "Form Responses 1")
-    jc_df = load_sheet(st.secrets["jumbocash_sheet_id"], "Form Responses 1")
-    manual_df = load_sheet(st.secrets["cash_upi_sheet_id"], "cash refund")
+    # ================= LOAD SHEETS =================
 
-    # ================= CASH / UPI =================
-    cash_df["BZID"] = cash_df["Business ID"].astype(str).str.strip().str.upper()
+    cash_df = load_sheet(
+        st.secrets["cash_upi_sheet_id"],
+        "Form Responses 1"
+    )
+
+    jc_df = load_sheet(
+        st.secrets["jumbocash_sheet_id"],
+        "Form Responses 1"
+    )
+
+    manual_df = load_sheet(
+        st.secrets["cash_upi_sheet_id"],
+        "cash refund"
+    )
+
+    # =====================================================
+    # CASH / UPI
+    # =====================================================
+
+    cash_df["BZID"] = (
+        cash_df["Business ID"]
+        .astype(str)
+        .str.strip()
+        .str.upper()
+    )
 
     cash_df["Date"] = pd.to_datetime(
-        cash_df["Date"], errors="coerce"
-    ).fillna(pd.to_datetime(cash_df["Timestamp"], errors="coerce"))
+        cash_df["Date"],
+        errors="coerce"
+    )
+
+    if "Timestamp" in cash_df.columns:
+
+        cash_df["Date"] = cash_df["Date"].fillna(
+            pd.to_datetime(
+                cash_df["Timestamp"],
+                errors="coerce"
+            )
+        )
 
     cash_matches = cash_df[
-        (cash_df["BZID"] == bzid) &
-        (cash_df["Date"].notna()) &
+
+        (cash_df["BZID"] == bzid)
+
+        &
+
+        (cash_df["Date"].notna())
+
+        &
+
         (cash_df["Date"].dt.month == month_input)
+
+        &
+
+        (cash_df["Date"].dt.year == selected_year)
+
     ]
 
-    # ================= JUMBOCASH =================
+    # =====================================================
+    # JUMBOCASH
+    # =====================================================
+
     jc_df.columns = jc_df.columns.str.strip()
 
-    jc_df["BZID"] = jc_df["BZID"].astype(str).str.strip().str.upper()
+    jc_df["BZID"] = (
 
-    # Handle date safely
+        jc_df["BZID"]
+
+        .astype(str)
+
+        .str.strip()
+
+        .str.upper()
+
+    )
+
     if "date" in jc_df.columns:
-        jc_df["Date"] = pd.to_datetime(jc_df["date"], errors="coerce")
+
+        jc_df["Date"] = pd.to_datetime(
+
+            jc_df["date"],
+
+            errors="coerce"
+
+        )
+
     elif "Date" in jc_df.columns:
-        jc_df["Date"] = pd.to_datetime(jc_df["Date"], errors="coerce")
+
+        jc_df["Date"] = pd.to_datetime(
+
+            jc_df["Date"],
+
+            errors="coerce"
+
+        )
+
     else:
+
         jc_df["Date"] = pd.NaT
 
     if "Timestamp" in jc_df.columns:
+
         jc_df["Date"] = jc_df["Date"].fillna(
-            pd.to_datetime(jc_df["Timestamp"], errors="coerce")
+
+            pd.to_datetime(
+
+                jc_df["Timestamp"],
+
+                errors="coerce"
+
+            )
+
         )
 
     jc_matches = jc_df[
-        (jc_df["BZID"] == bzid) &
-        (jc_df["Date"].notna()) &
+
+        (jc_df["BZID"] == bzid)
+
+        &
+
+        (jc_df["Date"].notna())
+
+        &
+
         (jc_df["Date"].dt.month == month_input)
+
+        &
+
+        (jc_df["Date"].dt.year == selected_year)
+
     ]
 
-    # ================= MANUAL CASH =================
-    manual_df["BZID"] = manual_df["BZID"].astype(str).str.strip().str.upper()
+    # =====================================================
+    # MANUAL CASH
+    # =====================================================
 
-    manual_df["Date"] = pd.to_datetime(manual_df["Date"], errors="coerce")
+    manual_df["BZID"] = (
+
+        manual_df["BZID"]
+
+        .astype(str)
+
+        .str.strip()
+
+        .str.upper()
+
+    )
+
+    manual_df["Date"] = pd.to_datetime(
+
+        manual_df["Date"],
+
+        errors="coerce"
+
+    )
+
+    if "Timestamp" in manual_df.columns:
+
+        manual_df["Date"] = manual_df["Date"].fillna(
+
+            pd.to_datetime(
+
+                manual_df["Timestamp"],
+
+                errors="coerce"
+
+            )
+
+        )
 
     manual_matches = manual_df[
-        (manual_df["BZID"] == bzid) &
-        (
-            (manual_df["Date"].dt.month == month_input) |
-            (manual_df["Month"].astype(str).str.contains(month_short, case=False, na=False))
-        )
+
+        (manual_df["BZID"] == bzid)
+
+        &
+
+        (manual_df["Date"].notna())
+
+        &
+
+        (manual_df["Date"].dt.month == month_input)
+
+        &
+
+        (manual_df["Date"].dt.year == selected_year)
+
     ]
 
-    # ================= CALCULATIONS =================
-    cash_count = cash_matches["Ticket Number"].nunique() if not cash_matches.empty else 0
-    jc_count = jc_matches["Ticket ID"].nunique() if not jc_matches.empty else 0
-    manual_count = manual_matches["Ticket No"].nunique() if not manual_matches.empty else 0
+    # =====================================================
+    # COUNTS
+    # =====================================================
 
-    cash_amount = pd.to_numeric(cash_matches["Amount"], errors="coerce").sum() if not cash_matches.empty else 0
-    jc_amount = pd.to_numeric(jc_matches["Amount"], errors="coerce").sum() if not jc_matches.empty else 0
-    manual_amount = pd.to_numeric(manual_matches["Amount"], errors="coerce").sum() if not manual_matches.empty else 0
+    cash_count = (
+
+        cash_matches["Ticket Number"].nunique()
+
+        if not cash_matches.empty
+
+        else 0
+
+    )
+
+    jc_count = (
+
+        jc_matches["Ticket ID"].nunique()
+
+        if not jc_matches.empty
+
+        else 0
+
+    )
+
+    manual_count = (
+
+        manual_matches["Ticket No"].nunique()
+
+        if not manual_matches.empty
+
+        else 0
+
+    )
+
+    # =====================================================
+    # AMOUNTS
+    # =====================================================
+
+    cash_amount = (
+
+        pd.to_numeric(
+
+            cash_matches["Amount"],
+
+            errors="coerce"
+
+        ).sum()
+
+        if not cash_matches.empty
+
+        else 0
+
+    )
+
+    jc_amount = (
+
+        pd.to_numeric(
+
+            jc_matches["Amount"],
+
+            errors="coerce"
+
+        ).sum()
+
+        if not jc_matches.empty
+
+        else 0
+
+    )
+
+    manual_amount = (
+
+        pd.to_numeric(
+
+            manual_matches["Amount"],
+
+            errors="coerce"
+
+        ).sum()
+
+        if not manual_matches.empty
+
+        else 0
+
+    )
 
     total_count = cash_count + jc_count + manual_count
+
     total_amount = cash_amount + jc_amount + manual_amount
 
-    # ================= OUTPUT =================
+    # =====================================================
+    # SUMMARY
+    # =====================================================
+
     st.subheader("Summary")
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Cash / UPI", cash_count, f"₹ {round(cash_amount,2)}")
-    c2.metric("Jumbocash", jc_count, f"₹ {round(jc_amount,2)}")
-    c3.metric("Manual Cash", manual_count, f"₹ {round(manual_amount,2)}")
-    c4.metric("Total", total_count, f"₹ {round(total_amount,2)}")
 
-    # ================= DECISION =================
+    c1.metric(
+
+        "Cash / UPI",
+
+        cash_count,
+
+        f"₹ {round(cash_amount,2)}"
+
+    )
+
+    c2.metric(
+
+        "Jumbocash",
+
+        jc_count,
+
+        f"₹ {round(jc_amount,2)}"
+
+    )
+
+    c3.metric(
+
+        "Manual Cash",
+
+        manual_count,
+
+        f"₹ {round(manual_amount,2)}"
+
+    )
+
+    c4.metric(
+
+        "Total",
+
+        total_count,
+
+        f"₹ {round(total_amount,2)}"
+
+    )
+
+    # =====================================================
+    # DECISION
+    # =====================================================
+
     if total_count <= 5:
+
         st.success(f"✅ APPROVE ({total_count})")
+
     else:
+
         st.error(f"❌ DENY ({total_count})")
 
-    # ================= TABLES =================
+    # =====================================================
+    # TABLES
+    # =====================================================
+
     if not cash_matches.empty:
+
         st.write("Cash / UPI")
+
         st.dataframe(
+
             cash_matches.reset_index(drop=True),
+
             use_container_width=True
+
         )
 
     if not jc_matches.empty:
+
         st.write("Jumbocash")
+
         st.dataframe(
+
             jc_matches.reset_index(drop=True),
+
             use_container_width=True
+
         )
 
     if not manual_matches.empty:
+
         st.write("Manual Cash Refund")
+
         st.dataframe(
+
             manual_matches.reset_index(drop=True),
+
             use_container_width=True
+
         )
 
-    if cash_matches.empty and jc_matches.empty and manual_matches.empty:
+    if (
+
+        cash_matches.empty
+
+        and jc_matches.empty
+
+        and manual_matches.empty
+
+    ):
+
         st.warning("No data found")
