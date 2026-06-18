@@ -39,12 +39,32 @@ st.markdown("""
         border-radius: 10px;
         padding: 20px;
         border-left: 5px solid #28a745;
+        display: flex;
+        align-items: center;
+        gap: 15px;
     }
     .decision-deny {
         background-color: #f8d7da;
         border-radius: 10px;
         padding: 20px;
         border-left: 5px solid #dc3545;
+        display: flex;
+        align-items: center;
+        gap: 15px;
+    }
+    .decision-icon {
+        font-size: 48px;
+        line-height: 1;
+    }
+    .decision-text {
+        flex: 1;
+    }
+    .decision-text h2 {
+        margin: 0;
+    }
+    .decision-text p {
+        margin: 5px 0 0 0;
+        font-size: 18px;
     }
     .section-header {
         border-bottom: 2px solid #e0e0e0;
@@ -54,6 +74,29 @@ st.markdown("""
     }
     .details-tabs {
         margin-top: 10px;
+    }
+    .walking-man {
+        font-size: 48px;
+        display: inline-block;
+        animation: walk 0.5s infinite alternate;
+    }
+    @keyframes walk {
+        0% { transform: translateX(0px); }
+        100% { transform: translateX(5px); }
+    }
+    .tick-mark {
+        font-size: 48px;
+        display: inline-block;
+        animation: bounce 0.5s ease;
+    }
+    @keyframes bounce {
+        0% { transform: scale(0); }
+        50% { transform: scale(1.3); }
+        100% { transform: scale(1); }
+    }
+    .cross-mark {
+        font-size: 48px;
+        display: inline-block;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -533,19 +576,47 @@ if st.button("Fetch Details"):
         st.markdown(f"## 📊 Current Month")
         st.markdown(f"### {selected_month_label}")
 
-        # Decision Card
+        # Decision Card with Walking Man and Tick/Cross
         if total_count_current <= 5:
             st.markdown(f"""
             <div class="decision-approve">
-                <h2 style="color: #28a745; margin: 0;">✅ APPROVED</h2>
-                <p style="font-size: 18px; margin: 5px 0;">Total Refunds: {total_count_current} (Within limit of 5)</p>
+                <div class="decision-icon tick-mark">✅</div>
+                <div class="decision-text">
+                    <h2 style="color: #28a745; margin: 0;">APPROVED</h2>
+                    <p style="font-size: 18px; margin: 5px 0;">Total Refunds: {total_count_current} (Within limit of 5)</p>
+                </div>
             </div>
             """, unsafe_allow_html=True)
         else:
             st.markdown(f"""
             <div class="decision-deny">
-                <h2 style="color: #dc3545; margin: 0;">❌ DENIED</h2>
-                <p style="font-size: 18px; margin: 5px 0;">Total Refunds: {total_count_current} (Exceeds limit of 5)</p>
+                <div class="decision-icon cross-mark">❌</div>
+                <div class="decision-text">
+                    <h2 style="color: #dc3545; margin: 0;">DENIED</h2>
+                    <p style="font-size: 18px; margin: 5px 0;">Total Refunds: {total_count_current} (Exceeds limit of 5)</p>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        # Add walking man animation for deny
+        if total_count_current > 5:
+            st.markdown("""
+            <div style="text-align: center; padding: 10px; background-color: #f8d7da; border-radius: 10px; margin-top: 10px;">
+                <span class="walking-man">🚶</span>
+                <span style="font-size: 24px; margin-left: 10px;">❌</span>
+                <p style="margin: 5px 0 0 0; font-size: 14px; color: #721c24;">
+                    Too many refunds! Walk away from this request.
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown("""
+            <div style="text-align: center; padding: 10px; background-color: #d4edda; border-radius: 10px; margin-top: 10px;">
+                <span style="font-size: 32px;">✅</span>
+                <span style="font-size: 24px; margin-left: 10px;">👍</span>
+                <p style="margin: 5px 0 0 0; font-size: 14px; color: #155724;">
+                    All good! Proceed with the refund.
+                </p>
             </div>
             """, unsafe_allow_html=True)
 
