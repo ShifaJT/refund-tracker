@@ -669,12 +669,14 @@ if st.button("Fetch Details"):
     
     monthly_df = pd.DataFrame(monthly_data)
     
-    # Highlight current month with color
+    # Highlight current month with color - using the newer 'map' method
+    def highlight_current(row):
+        if row['Status'] == '📍 Current':
+            return ['background-color: #e3f2fd'] * len(row)
+        return [''] * len(row)
+    
     st.dataframe(
-        monthly_df.style.applymap(
-            lambda x: 'background-color: #e3f2fd' if x == '📍 Current' else '',
-            subset=['Status']
-        ),
+        monthly_df.style.apply(highlight_current, axis=1),
         use_container_width=True,
         hide_index=True
     )
