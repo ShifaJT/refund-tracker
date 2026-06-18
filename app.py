@@ -117,16 +117,18 @@ def load_sheet(sheet_id, sheet_name):
     return df
 
 
-# ================= GET REFUND COUNT FOR YEAR =================
-def get_refund_count_for_year(df, bzid, year):
-    """Get unique refund count for a specific year"""
+# ================= GET REFUND COUNT FOR PERIOD =================
+def get_refund_count_for_period(df, bzid, year, start_month=1, end_month=12):
+    """Get unique refund count for a specific period within a year"""
     if df.empty:
         return 0
     
     df_filtered = df[
         (df["BZID"] == bzid) &
         (df["Date"].notna()) &
-        (df["Date"].dt.year == year)
+        (df["Date"].dt.year == year) &
+        (df["Date"].dt.month >= start_month) &
+        (df["Date"].dt.month <= end_month)
     ]
     
     # Try to get unique count based on ticket column
@@ -179,6 +181,7 @@ col1, col2 = st.columns(2)
 bzid_input = col1.text_input("Enter BZID")
 
 current_year = datetime.now().year
+current_month = datetime.now().month
 
 month_options = {
     datetime(current_year, i, 1).strftime("%B %Y"): i
@@ -489,7 +492,7 @@ if st.button("Fetch Details"):
         total_amount_current = cash_amount_current + jc_amount_current + manual_amount_current
 
         # =====================================================
-        # GET YEARLY TREND DATA
+        # GET YEARLY TREND DATA (Jan to Current Month)
         # =====================================================
         
         # Combine all dataframes for yearly trend analysis
@@ -499,9 +502,22 @@ if st.button("Fetch Details"):
             manual_df[["BZID", "Date"]]
         ], ignore_index=True)
         
-        # Get refund counts for current year and last year
-        current_year_count = get_refund_count_for_year(all_refunds, bzid, current_year)
-        last_year_count = get_refund_count_for_year(all_refunds, bzid, current_year - 1)
+        # Get refund counts for current year and last year (Jan to current month)
+        current_year_count = get_refund_count_for_period(
+            all_refunds, 
+            bzid, 
+            current_year, 
+            start_month=1, 
+            end_month=current_month
+        )
+        
+        last_year_count = get_refund_count_for_period(
+            all_refunds, 
+            bzid, 
+            current_year - 1, 
+            start_month=1, 
+            end_month=current_month
+        )
         
         # Get monthly counts for current year
         month_names, monthly_counts = get_monthly_counts(all_refunds, bzid, current_year)
@@ -610,9 +626,9 @@ if st.button("Fetch Details"):
     # =====================================================
     
     st.markdown("---")
-    st.markdown(f"## 📈 Yearly Refund Trend")
+    st.markdown(f"## 📈 Yearly Refund Trend (Jan - {datetime(current_year, current_month, 1).strftime('%B')})")
     
-    # Year-over-year comparison
+    # Year-over-year comparison (Jan to current month)
     col1, col2, col3 = st.columns([1, 1, 2])
     
     with col1:
@@ -621,7 +637,7 @@ if st.button("Fetch Details"):
             <p style="margin: 0; opacity: 0.8;">Current Year</p>
             <h2 style="margin: 5px 0;">{current_year}</h2>
             <h1 style="margin: 5px 0;">{current_year_count}</h1>
-            <p style="margin: 0; opacity: 0.9;">Total Refunds</p>
+            <p style="margin: 0; opacity: 0.9;">Jan - {datetime(current_year, current_month, 1).strftime('%b')} Total</p>
         </div>
         """, unsafe_allow_html=True)
     
@@ -631,7 +647,7 @@ if st.button("Fetch Details"):
             <p style="margin: 0; opacity: 0.8;">Previous Year</p>
             <h2 style="margin: 5px 0;">{current_year - 1}</h2>
             <h1 style="margin: 5px 0;">{last_year_count}</h1>
-            <p style="margin: 0; opacity: 0.9;">Total Refunds</p>
+            <p style="margin: 0; opacity: 0.9;">Jan - {datetime(current_year, current_month, 1).strftime('%b')} Total</p>
         </div>
         """, unsafe_allow_html=True)
     
@@ -646,7 +662,7 @@ if st.button("Fetch Details"):
         
         st.markdown(f"""
         <div style="background-color: #f8f9fa; border-radius: 10px; padding: 20px; height: 100%; display: flex; flex-direction: column; justify-content: center;">
-            <p style="margin: 0; color: #6c757d; font-size: 14px;">Year-over-Year Change</p>
+            <p style="margin: 0; color: #6c757d; font-size: 14px;">Year-over-Year Change<br><small style="color: #999;">(Jan - {datetime(current_year, current_month, 1).strftime('%b')})</small></p>
             <h2 style="margin: 5px 0; color: {'#28a745' if current_year_count >= last_year_count else '#dc3545'}">{change_text}</h2>
             <p style="margin: 0; color: #6c757d; font-size: 14px;">
                 {current_year_count} vs {last_year_count} refunds
@@ -661,6 +677,9 @@ if st.button("Fetch Details"):
     monthly_data = []
     for i, month in enumerate(month_names):
         status = "📍 Current" if i == month_input - 1 else ""
+        # Mark months beyond current month as "Future" if it's the current year
+        if selected_year == current_year and i >= current_month:
+            status = "⏳ Future" if status != "📍 Current" else status
         monthly_data.append({
             "Month": month,
             "Refunds": monthly_counts[i],
@@ -669,10 +688,12 @@ if st.button("Fetch Details"):
     
     monthly_df = pd.DataFrame(monthly_data)
     
-    # Highlight current month with color - using the newer 'map' method
+    # Highlight current month with color
     def highlight_current(row):
         if row['Status'] == '📍 Current':
             return ['background-color: #e3f2fd'] * len(row)
+        elif row['Status'] == '⏳ Future':
+            return ['background-color: #f5f5f5; color: #999'] * len(row)
         return [''] * len(row)
     
     st.dataframe(
