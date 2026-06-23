@@ -211,6 +211,7 @@ def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_m
         if bzid_col is None:
             return pd.DataFrame(columns=["BZID", "Date", "Amount", "Ticket"])
         
+        # Convert BZID to string and clean
         df["BZID"] = df[bzid_col].astype(str).str.strip().str.upper()
         
         # Find Date column
@@ -223,11 +224,27 @@ def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_m
         if date_col is None:
             return pd.DataFrame(columns=["BZID", "Date", "Amount", "Ticket"])
         
+        # Convert to datetime - handle multiple formats
         df["Date"] = pd.to_datetime(df[date_col], errors="coerce")
         
-        # If date is missing and we have Timestamp, try that
-        if df["Date"].isna().all() and "Timestamp" in df.columns:
-            df["Date"] = pd.to_datetime(df["Timestamp"], errors="coerce")
+        # If date conversion failed, try parsing as Excel date
+        if df["Date"].isna().all():
+            # Try to parse as Excel serial date
+            try:
+                df["Date"] = pd.to_datetime(df[date_col], errors="coerce", unit='D', origin='1899-12-30')
+            except:
+                pass
+        
+        # If still all NA, try extracting from string
+        if df["Date"].isna().all():
+            try:
+                df["Date"] = pd.to_datetime(df[date_col], errors="coerce", infer_datetime_format=True)
+            except:
+                pass
+        
+        # If we still have no dates, return empty
+        if df["Date"].isna().all():
+            return pd.DataFrame(columns=["BZID", "Date", "Amount", "Ticket"])
         
         # Filter to current year up to current month
         df = df[
@@ -272,6 +289,16 @@ def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_m
     
     # Combine all data
     all_data = pd.concat([cash_prep, jc_prep, manual_prep], ignore_index=True)
+    
+    if all_data.empty:
+        return pd.DataFrame()
+    
+    # Ensure Date is datetime
+    if not pd.api.types.is_datetime64_any_dtype(all_data["Date"]):
+        all_data["Date"] = pd.to_datetime(all_data["Date"], errors="coerce")
+    
+    # Remove rows with invalid dates
+    all_data = all_data[all_data["Date"].notna()]
     
     if all_data.empty:
         return pd.DataFrame()
