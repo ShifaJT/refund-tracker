@@ -66,22 +66,6 @@ st.markdown("""
         margin: 5px 0 0 0;
         font-size: 18px;
     }
-    .high-risk-card {
-        background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-        border-radius: 10px;
-        padding: 15px;
-        color: white;
-        margin: 5px;
-    }
-    .warning-card {
-        background: linear-gradient(135deg, #ffecd2 0%, #fcb69f 100%);
-        border-radius: 10px;
-        padding: 15px;
-        margin: 5px;
-    }
-    .high-risk-row {
-        background-color: #fff3cd;
-    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -201,7 +185,7 @@ def get_high_risk_customers_optimized(all_refunds, cash_df, jc_df, manual_df, ye
     Optimized version to find high risk customers using vectorized operations
     """
     if all_refunds.empty or current_month is None:
-        return pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame()
     
     # Filter data for current year up to current month
     all_refunds_year = all_refunds[
@@ -210,7 +194,7 @@ def get_high_risk_customers_optimized(all_refunds, cash_df, jc_df, manual_df, ye
     ]
     
     if all_refunds_year.empty:
-        return pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame()
     
     # Group by BZID and month to get monthly refund counts
     monthly_counts_df = all_refunds_year.groupby(
@@ -300,7 +284,7 @@ def get_high_risk_customers_optimized(all_refunds, cash_df, jc_df, manual_df, ye
                 **monthly_breakdown  # Add each month as a separate column
             })
     
-    return pd.DataFrame(results)
+    return pd.DataFrame(results), all_refunds
 
 # ================= REFRESH =================
 if st.button("🔄 Refresh Data"):
@@ -781,6 +765,12 @@ with tab2:
         
         return cash_df, jc_df, manual_df
     
+    # Initialize session state for high risk data
+    if 'high_risk_data' not in st.session_state:
+        st.session_state.high_risk_data = None
+    if 'all_refunds_data' not in st.session_state:
+        st.session_state.all_refunds_data = None
+    
     if st.button("🔄 Load High Risk Customers"):
         with st.spinner("Analyzing customer data..."):
             # Load all data with caching
@@ -863,8 +853,11 @@ with tab2:
                 manual_df[["BZID", "Date"]]
             ], ignore_index=True)
             
+            # Store in session state
+            st.session_state.all_refunds_data = all_refunds
+            
             # Get high risk customers using optimized function
-            high_risk_df = get_high_risk_customers_optimized(
+            high_risk_df, _ = get_high_risk_customers_optimized(
                 all_refunds, 
                 cash_df, 
                 jc_df, 
@@ -874,119 +867,125 @@ with tab2:
                 threshold=3
             )
             
-            if not high_risk_df.empty:
-                high_risk_df = high_risk_df.sort_values("Total Refunds", ascending=False)
-                
-                st.success(f"Found {len(high_risk_df)} high-risk customers")
-                
-                # Display metrics
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Total High Risk Customers", len(high_risk_df))
-                with col2:
-                    st.metric("Total Refunds (All)", high_risk_df["Total Refunds"].sum())
-                with col3:
-                    st.metric("Total Amount (All)", f"₹{high_risk_df['Total Amount (₹)'].sum():,.2f}")
-                
-                # Get month columns for display
-                month_abbr = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", 
-                              "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][:current_month]
-                
-                # Create column config for better display
-                column_config = {
-                    "BZID": st.column_config.TextColumn("BZID", help="Customer Business ID"),
-                    "Total Refunds": st.column_config.NumberColumn("Total Refunds", help="Total refunds year-to-date"),
-                    "Monthly Average": st.column_config.NumberColumn("Avg/Month", help="Average refunds per month", format="%.2f"),
-                    "Months with Data": st.column_config.NumberColumn("Months Active", help="Number of months with at least 1 refund"),
-                    "Total Amount (₹)": st.column_config.NumberColumn("Total Amount", help="Total amount refunded", format="₹%.2f"),
-                }
-                
-                # Add month columns to config
-                for month in month_abbr:
-                    column_config[month] = st.column_config.NumberColumn(
-                        month, 
-                        help=f"Refunds in {month}",
-                        width="small"
-                    )
-                
-                # Display the dataframe with month columns
-                st.markdown("### 📊 Customer Monthly Refund Breakdown")
-                st.markdown("*Each column shows refunds per month. Red numbers indicate 3+ refunds in that month.*")
-                
-                # Apply color styling to the dataframe
-                def highlight_high_risk(row):
-                    styles = ['' for _ in range(len(row))]
-                    for i, col in enumerate(row.index):
-                        if col in month_abbr:
-                            try:
-                                val = int(row[col])
-                                if val >= 3:
-                                    styles[i] = 'background-color: #ffcccc; font-weight: bold; color: #cc0000;'
-                            except:
-                                pass
-                    return styles
-                
-                styled_df = high_risk_df.style.apply(highlight_high_risk, axis=1)
-                
-                st.dataframe(
-                    styled_df,
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config=column_config
-                )
-                
-                # Download button
-                csv = high_risk_df.to_csv(index=False)
-                st.download_button(
-                    label="📥 Download High Risk Customers Report",
-                    data=csv,
-                    file_name=f"high_risk_customers_{current_year}.csv",
-                    mime="text/csv"
-                )
-                
-                # Show individual customer breakdown
-                st.markdown("### 📊 Individual Customer Monthly Breakdown")
-                st.markdown("*Select a BZID below to see their refund pattern in detail.*")
-                
-                selected_bzid = st.selectbox(
-                    "Select BZID to view details",
-                    high_risk_df["BZID"].tolist()
-                )
-                
-                if selected_bzid:
-                    # Get monthly counts for selected customer
-                    _, monthly_counts = get_monthly_counts(all_refunds, selected_bzid, current_year)
-                    
-                    # Create monthly breakdown for this customer
-                    monthly_data = []
-                    total_refunds = 0
-                    for i, month in enumerate(month_abbr):
-                        count = monthly_counts[i]
-                        total_refunds += count
-                        monthly_data.append({
-                            "Month": month,
-                            "Refunds": count,
-                            "Status": "⚠️ High" if count >= 3 else "✅ Normal"
-                        })
-                    
-                    monthly_df = pd.DataFrame(monthly_data)
-                    
-                    # Show summary for selected customer
-                    st.info(f"""
-                    **Customer Summary:**
-                    - Total Refunds: **{total_refunds}**  
-                    - Average per month: **{total_refunds/current_month:.2f}**  
-                    - Months with refunds: **{len([m for m in monthly_data if m['Refunds'] > 0])}** out of {current_month}
-                    """)
-                    
-                    # Display monthly breakdown
-                    st.dataframe(
-                        monthly_df,
-                        use_container_width=True,
-                        hide_index=True
-                    )
-                    
-                    # Show as bar chart
-                    st.bar_chart(monthly_df.set_index("Month")["Refunds"])
-            else:
-                st.info("✅ No high-risk customers found! All customers have less than 3 refunds per month on average.")
+            st.session_state.high_risk_data = high_risk_df
+    
+    # Display high risk data from session state
+    if st.session_state.high_risk_data is not None and not st.session_state.high_risk_data.empty:
+        high_risk_df = st.session_state.high_risk_data
+        all_refunds = st.session_state.all_refunds_data
+        
+        high_risk_df = high_risk_df.sort_values("Total Refunds", ascending=False)
+        
+        st.success(f"Found {len(high_risk_df)} high-risk customers")
+        
+        # Display metrics
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Total High Risk Customers", len(high_risk_df))
+        with col2:
+            st.metric("Total Refunds (All)", high_risk_df["Total Refunds"].sum())
+        with col3:
+            st.metric("Total Amount (All)", f"₹{high_risk_df['Total Amount (₹)'].sum():,.2f}")
+        
+        # Get month columns for display
+        month_abbr = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", 
+                      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][:current_month]
+        
+        # Create column config for better display
+        column_config = {
+            "BZID": st.column_config.TextColumn("BZID", help="Customer Business ID"),
+            "Total Refunds": st.column_config.NumberColumn("Total Refunds", help="Total refunds year-to-date"),
+            "Monthly Average": st.column_config.NumberColumn("Avg/Month", help="Average refunds per month", format="%.2f"),
+            "Months with Data": st.column_config.NumberColumn("Months Active", help="Number of months with at least 1 refund"),
+            "Total Amount (₹)": st.column_config.NumberColumn("Total Amount", help="Total amount refunded", format="₹%.2f"),
+        }
+        
+        # Add month columns to config
+        for month in month_abbr:
+            column_config[month] = st.column_config.NumberColumn(
+                month, 
+                help=f"Refunds in {month}",
+                width="small"
+            )
+        
+        # Display the dataframe with month columns
+        st.markdown("### 📊 Customer Monthly Refund Breakdown")
+        st.markdown("*Each column shows refunds per month. Red numbers indicate 3+ refunds in that month.*")
+        
+        # Apply color styling to the dataframe
+        def highlight_high_risk(row):
+            styles = ['' for _ in range(len(row))]
+            for i, col in enumerate(row.index):
+                if col in month_abbr:
+                    try:
+                        val = int(row[col])
+                        if val >= 3:
+                            styles[i] = 'background-color: #ffcccc; font-weight: bold; color: #cc0000;'
+                    except:
+                        pass
+            return styles
+        
+        styled_df = high_risk_df.style.apply(highlight_high_risk, axis=1)
+        
+        st.dataframe(
+            styled_df,
+            use_container_width=True,
+            hide_index=True,
+            column_config=column_config
+        )
+        
+        # Download button
+        csv = high_risk_df.to_csv(index=False)
+        st.download_button(
+            label="📥 Download High Risk Customers Report",
+            data=csv,
+            file_name=f"high_risk_customers_{current_year}.csv",
+            mime="text/csv"
+        )
+        
+        # Show individual customer breakdown
+        st.markdown("### 📊 Individual Customer Monthly Breakdown")
+        st.markdown("*Select a BZID below to see their refund pattern in detail.*")
+        
+        selected_bzid = st.selectbox(
+            "Select BZID to view details",
+            high_risk_df["BZID"].tolist()
+        )
+        
+        if selected_bzid and all_refunds is not None:
+            # Get monthly counts for selected customer
+            _, monthly_counts = get_monthly_counts(all_refunds, selected_bzid, current_year)
+            
+            # Create monthly breakdown for this customer
+            monthly_data = []
+            total_refunds = 0
+            for i, month in enumerate(month_abbr):
+                count = monthly_counts[i]
+                total_refunds += count
+                monthly_data.append({
+                    "Month": month,
+                    "Refunds": count,
+                    "Status": "⚠️ High" if count >= 3 else "✅ Normal"
+                })
+            
+            monthly_df = pd.DataFrame(monthly_data)
+            
+            # Show summary for selected customer
+            st.info(f"""
+            **Customer Summary:**
+            - Total Refunds: **{total_refunds}**  
+            - Average per month: **{total_refunds/current_month:.2f}**  
+            - Months with refunds: **{len([m for m in monthly_data if m['Refunds'] > 0])}** out of {current_month}
+            """)
+            
+            # Display monthly breakdown
+            st.dataframe(
+                monthly_df,
+                use_container_width=True,
+                hide_index=True
+            )
+            
+            # Show as bar chart
+            st.bar_chart(monthly_df.set_index("Month")["Refunds"])
+    elif st.session_state.high_risk_data is not None and st.session_state.high_risk_data.empty:
+        st.info("✅ No high-risk customers found! All customers have less than 3 refunds per month on average.")
