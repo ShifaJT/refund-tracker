@@ -74,18 +74,6 @@ st.markdown("""
         border-radius: 5px;
         margin: 10px 0;
     }
-    .risk-extreme {
-        background-color: #dc3545;
-        color: white;
-        font-weight: bold;
-    }
-    .risk-high {
-        background-color: #f8d7da;
-        font-weight: bold;
-    }
-    .risk-medium {
-        background-color: #fff3cd;
-    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -209,14 +197,37 @@ def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_m
     # Prepare all dataframes with common structure
     def prepare_df(df, df_type):
         if df.empty:
-            return pd.DataFrame(columns=["BZID", "Date", "Amount"])
+            return pd.DataFrame(columns=["BZID", "Date", "Amount", "Ticket"])
         
         df = df.copy()
-        df["BZID"] = df["BZID"].astype(str).str.strip().str.upper()
-        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
         
-        if "Timestamp" in df.columns:
-            df["Date"] = df["Date"].fillna(pd.to_datetime(df["Timestamp"], errors="coerce"))
+        # Find BZID column - handle different column names
+        bzid_col = None
+        for col in ["BZID", "Business ID", "BZD", "bzid"]:
+            if col in df.columns:
+                bzid_col = col
+                break
+        
+        if bzid_col is None:
+            return pd.DataFrame(columns=["BZID", "Date", "Amount", "Ticket"])
+        
+        df["BZID"] = df[bzid_col].astype(str).str.strip().str.upper()
+        
+        # Find Date column
+        date_col = None
+        for col in ["Date", "date", "Timestamp", "timestamp"]:
+            if col in df.columns:
+                date_col = col
+                break
+        
+        if date_col is None:
+            return pd.DataFrame(columns=["BZID", "Date", "Amount", "Ticket"])
+        
+        df["Date"] = pd.to_datetime(df[date_col], errors="coerce")
+        
+        # If date is missing and we have Timestamp, try that
+        if df["Date"].isna().all() and "Timestamp" in df.columns:
+            df["Date"] = pd.to_datetime(df["Timestamp"], errors="coerce")
         
         # Filter to current year up to current month
         df = df[
@@ -225,9 +236,12 @@ def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_m
             (df["Date"].notna())
         ]
         
-        # Get amount column
+        if df.empty:
+            return pd.DataFrame(columns=["BZID", "Date", "Amount", "Ticket"])
+        
+        # Find Amount column
         amount_col = None
-        for col in ["Amount", "amount"]:
+        for col in ["Amount", "amount", "Refund Amount"]:
             if col in df.columns:
                 amount_col = col
                 break
@@ -237,9 +251,9 @@ def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_m
         else:
             df["Amount"] = 0
         
-        # Get ticket column for unique count
+        # Find Ticket column for unique count
         ticket_col = None
-        for col in ["Ticket Number", "Ticket ID", "Ticket No", "Ticket Number_1"]:
+        for col in ["Ticket Number", "Ticket ID", "Ticket No", "Ticket Number_1", "Ticket ID_1"]:
             if col in df.columns:
                 ticket_col = col
                 break
@@ -251,11 +265,10 @@ def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_m
         
         return df[["BZID", "Date", "Amount", "Ticket"]]
     
-    # Prepare all three dataframes in parallel
-    with st.spinner("Processing data..."):
-        cash_prep = prepare_df(cash_df, "cash")
-        jc_prep = prepare_df(jc_df, "jc")
-        manual_prep = prepare_df(manual_df, "manual")
+    # Prepare all three dataframes
+    cash_prep = prepare_df(cash_df, "cash")
+    jc_prep = prepare_df(jc_df, "jc")
+    manual_prep = prepare_df(manual_df, "manual")
     
     # Combine all data
     all_data = pd.concat([cash_prep, jc_prep, manual_prep], ignore_index=True)
@@ -318,14 +331,13 @@ def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_m
         max_monthly_refunds = max(monthly_counts) if monthly_counts else 0
         has_policy_breach = max_monthly_refunds >= 5
         
-        # Get total amount by payment type - use pre-calculated amounts
         # Get total amount across all months
         total_amount = sum(monthly_amounts)
         
-        # Get payment type breakdown - we need to calculate this separately
-        cash_total = cash_prep[cash_prep["BZID"] == bzid]["Amount"].sum()
-        jc_total = jc_prep[jc_prep["BZID"] == bzid]["Amount"].sum()
-        manual_total = manual_prep[manual_prep["BZID"] == bzid]["Amount"].sum()
+        # Get payment type breakdown
+        cash_total = cash_prep[cash_prep["BZID"] == bzid]["Amount"].sum() if not cash_prep.empty else 0
+        jc_total = jc_prep[jc_prep["BZID"] == bzid]["Amount"].sum() if not jc_prep.empty else 0
+        manual_total = manual_prep[manual_prep["BZID"] == bzid]["Amount"].sum() if not manual_prep.empty else 0
         
         # Risk assessment
         is_high_frequency = avg_refunds >= 3
