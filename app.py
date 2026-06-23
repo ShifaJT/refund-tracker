@@ -990,15 +990,12 @@ with tab2:
             - Months with refunds: **{len([m for m in monthly_data if m['Refunds'] > 0])}** out of {current_month}
             """)
             
-            # Display monthly breakdown
+            # Display monthly breakdown (without bar chart)
             st.dataframe(
                 monthly_df,
                 use_container_width=True,
                 hide_index=True
             )
-            
-            # Show as bar chart
-            st.bar_chart(monthly_df.set_index("Month")["Refunds"])
     elif st.session_state.high_risk_data is not None and st.session_state.high_risk_data.empty:
         st.info("✅ No high-risk customers found! All customers have less than 3 refunds per month on average.")
 
