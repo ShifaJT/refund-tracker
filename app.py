@@ -8,7 +8,7 @@ from datetime import datetime
 st.set_page_config(page_title="Refund Tracker", layout="wide")
 
 st.title("💰 Refund Tracker")
-st.info("Rule: Up to 5 refunds → APPROVE | 6 or more refunds → DENY")
+st.info("Rule: Less than 5 refunds → APPROVE | 5 or more refunds → DENY")
 
 # Custom CSS for better styling
 st.markdown("""
@@ -191,63 +191,104 @@ def get_monthly_counts(df, bzid, year):
         month_names.append(datetime(year, month, 1).strftime("%B"))
     return month_names, monthly_counts
 
-# ================= GET HIGH RISK CUSTOMERS =================
-def get_high_risk_customers(all_refunds, year, threshold=3, current_month=None):
+# ================= OPTIMIZED: GET HIGH RISK CUSTOMERS =================
+@st.cache_data(ttl=300)
+def get_high_risk_customers_optimized(all_refunds, cash_df, jc_df, manual_df, year, current_month, threshold=3):
     """
-    Find customers who have taken 3+ refunds every month on average
-    or have 3+ refunds in each month so far
+    Optimized version to find high risk customers using vectorized operations
     """
     if all_refunds.empty or current_month is None:
         return pd.DataFrame()
     
-    # Get all unique BZIDs
-    all_bzids = all_refunds["BZID"].unique()
-    high_risk_customers = []
+    # Filter data for current year up to current month
+    all_refunds_year = all_refunds[
+        (all_refunds["Date"].dt.year == year) &
+        (all_refunds["Date"].dt.month <= current_month)
+    ]
     
-    for bzid in all_bzids:
-        # Get monthly counts for this customer
-        month_names, monthly_counts = get_monthly_counts(all_refunds, bzid, year)
+    if all_refunds_year.empty:
+        return pd.DataFrame()
+    
+    # Group by BZID and month to get monthly refund counts
+    monthly_counts_df = all_refunds_year.groupby(
+        ["BZID", all_refunds_year["Date"].dt.month]
+    ).size().reset_index(name="Refund_Count")
+    
+    # Get all BZIDs with their monthly counts
+    bzid_monthly = monthly_counts_df.pivot(
+        index="BZID", 
+        columns="Date", 
+        values="Refund_Count"
+    ).fillna(0)
+    
+    # Fill missing months with 0
+    for month in range(1, current_month + 1):
+        if month not in bzid_monthly.columns:
+            bzid_monthly[month] = 0
+    
+    # Sort columns
+    bzid_monthly = bzid_monthly[sorted(bzid_monthly.columns)]
+    
+    # Calculate metrics for each BZID
+    results = []
+    
+    for bzid in bzid_monthly.index:
+        monthly_counts = bzid_monthly.loc[bzid].values.tolist()
         
-        # Consider only months up to current month
-        actual_counts = monthly_counts[:current_month]
+        # Skip if no data
+        if sum(monthly_counts) == 0:
+            continue
         
-        # Calculate average refunds per month
-        avg_refunds = sum(actual_counts) / len(actual_counts) if actual_counts else 0
+        # Calculate average
+        avg_refunds = sum(monthly_counts) / current_month
         
-        # Check if customer has 3+ refunds in every month so far
-        all_months_above_threshold = all(count >= threshold for count in actual_counts) if actual_counts else False
+        # Check if every month has 3+ refunds
+        all_months_above_threshold = all(count >= threshold for count in monthly_counts)
         
         # Check if average is 3 or more
         avg_above_threshold = avg_refunds >= threshold
         
-        # Check if total refunds year-to-date is significant (3 or more per month average)
-        total_refunds = sum(actual_counts)
-        months_with_data = len([c for c in actual_counts if c > 0])
-        
-        # Flag if: average >= 3 OR every month has 3+ refunds
+        # Flag if high risk
         if avg_above_threshold or all_months_above_threshold:
-            # Get total amount refunded for this customer in the year
-            customer_data = all_refunds[
-                (all_refunds["BZID"] == bzid) &
-                (all_refunds["Date"].dt.year == year) &
-                (all_refunds["Date"].dt.month <= current_month)
-            ]
-            
-            # Get total amount
+            # Get total amount refunded
             total_amount = 0
-            if not customer_data.empty:
-                # We need to get amount from original data - we'll fetch it differently
-                pass
             
-            high_risk_customers.append({
+            # Get cash amount
+            cash_amount = pd.to_numeric(
+                cash_df[(cash_df["BZID"] == bzid) & 
+                        (cash_df["Date"].dt.year == year) &
+                        (cash_df["Date"].dt.month <= current_month)]["Amount"],
+                errors="coerce"
+            ).sum()
+            
+            # Get jc amount
+            jc_amount = pd.to_numeric(
+                jc_df[(jc_df["BZID"] == bzid) & 
+                      (jc_df["Date"].dt.year == year) &
+                      (jc_df["Date"].dt.month <= current_month)]["Amount"],
+                errors="coerce"
+            ).sum()
+            
+            # Get manual amount
+            manual_amount = pd.to_numeric(
+                manual_df[(manual_df["BZID"] == bzid) & 
+                          (manual_df["Date"].dt.year == year) &
+                          (manual_df["Date"].dt.month <= current_month)]["Amount"],
+                errors="coerce"
+            ).sum()
+            
+            total_amount = cash_amount + jc_amount + manual_amount
+            
+            results.append({
                 "BZID": bzid,
-                "Total Refunds": total_refunds,
+                "Total Refunds": sum(monthly_counts),
                 "Monthly Average": round(avg_refunds, 2),
-                "Months with Data": months_with_data,
-                "Monthly Counts": ", ".join([str(c) for c in actual_counts])
+                "Months with Data": len([c for c in monthly_counts if c > 0]),
+                "Total Amount (₹)": round(total_amount, 2),
+                "Monthly Pattern": ", ".join([str(int(c)) for c in monthly_counts])
             })
     
-    return pd.DataFrame(high_risk_customers)
+    return pd.DataFrame(results)
 
 # ================= REFRESH =================
 if st.button("🔄 Refresh Data"):
@@ -505,13 +546,14 @@ with tab1:
             st.markdown(f"## 📊 Current Month")
             st.markdown(f"### {selected_month_label}")
 
-            if total_count_current <= 5:
+            # Deny if 5 or more, Approve only if less than 5
+            if total_count_current < 5:
                 st.markdown(f"""
                 <div class="decision-approve">
                     <div class="decision-icon tick-mark">✅</div>
                     <div class="decision-text">
                         <h2 style="color: #28a745; margin: 0;">APPROVED</h2>
-                        <p style="font-size: 18px; margin: 5px 0;">Total Refunds: {total_count_current} (Within limit of 5)</p>
+                        <p style="font-size: 18px; margin: 5px 0;">Total Refunds: {total_count_current} (Less than 5)</p>
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
@@ -521,18 +563,19 @@ with tab1:
                     <div class="decision-icon cross-mark">❌</div>
                     <div class="decision-text">
                         <h2 style="color: #dc3545; margin: 0;">DENIED</h2>
-                        <p style="font-size: 18px; margin: 5px 0;">Total Refunds: {total_count_current} (Exceeds limit of 5)</p>
+                        <p style="font-size: 18px; margin: 5px 0;">Total Refunds: {total_count_current} (5 or more - Limit reached)</p>
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
 
-            if total_count_current > 5:
+            # Deny if 5 or more, Approve only if less than 5
+            if total_count_current >= 5:
                 st.markdown("""
                 <div style="text-align: center; padding: 10px; background-color: #f8d7da; border-radius: 10px; margin-top: 10px;">
                     <span style="font-size: 32px;">🚶</span>
                     <span style="font-size: 24px; margin-left: 10px;">❌</span>
                     <p style="margin: 5px 0 0 0; font-size: 14px; color: #721c24;">
-                        Too many refunds! Walk away from this request.
+                        Limit reached! Walk away from this request.
                     </p>
                 </div>
                 """, unsafe_allow_html=True)
@@ -698,23 +741,30 @@ with tab2:
     st.markdown("## 🚨 High Risk Customers")
     st.info("Customers who average 3+ refunds per month or have 3+ refunds every month")
     
+    # Load data once and cache it
+    @st.cache_data(ttl=300)
+    def load_all_data():
+        cash_df = load_sheet(
+            st.secrets["cash_upi_sheet_id"],
+            "Form Responses 1"
+        )
+        
+        jc_df = load_sheet(
+            st.secrets["jumbocash_sheet_id"],
+            "Form Responses 1"
+        )
+        
+        manual_df = load_sheet(
+            st.secrets["cash_upi_sheet_id"],
+            "cash refund"
+        )
+        
+        return cash_df, jc_df, manual_df
+    
     if st.button("🔄 Load High Risk Customers"):
         with st.spinner("Analyzing customer data..."):
-            # Load all data
-            cash_df = load_sheet(
-                st.secrets["cash_upi_sheet_id"],
-                "Form Responses 1"
-            )
-
-            jc_df = load_sheet(
-                st.secrets["jumbocash_sheet_id"],
-                "Form Responses 1"
-            )
-
-            manual_df = load_sheet(
-                st.secrets["cash_upi_sheet_id"],
-                "cash refund"
-            )
+            # Load all data with caching
+            cash_df, jc_df, manual_df = load_all_data()
             
             # Clean and prepare data
             cash_df["BZID"] = (
@@ -793,78 +843,16 @@ with tab2:
                 manual_df[["BZID", "Date"]]
             ], ignore_index=True)
             
-            # Get all unique BZIDs
-            all_bzids = all_refunds["BZID"].unique()
-            
-            high_risk_customers = []
-            
-            for bzid in all_bzids:
-                # Skip if BZID is empty or NaN
-                if pd.isna(bzid) or bzid == "":
-                    continue
-                    
-                # Get monthly counts for this customer
-                _, monthly_counts = get_monthly_counts(all_refunds, bzid, current_year)
-                
-                # Consider only months up to current month
-                actual_counts = monthly_counts[:current_month]
-                
-                # Skip if no data
-                if sum(actual_counts) == 0:
-                    continue
-                
-                # Calculate average refunds per month
-                months_with_data = len([c for c in actual_counts if c > 0])
-                avg_refunds = sum(actual_counts) / current_month if current_month > 0 else 0
-                
-                # Check if customer has 3+ refunds in every month so far
-                all_months_above_threshold = all(count >= 3 for count in actual_counts) if actual_counts else False
-                
-                # Check if average is 3 or more
-                avg_above_threshold = avg_refunds >= 3
-                
-                # Flag if: average >= 3 OR every month has 3+ refunds
-                if avg_above_threshold or all_months_above_threshold:
-                    # Get total amount refunded - we need to get it from original data with amounts
-                    total_amount = 0
-                    
-                    # Get cash amount
-                    cash_amount = pd.to_numeric(
-                        cash_df[(cash_df["BZID"] == bzid) & 
-                                (cash_df["Date"].dt.year == current_year) &
-                                (cash_df["Date"].dt.month <= current_month)]["Amount"],
-                        errors="coerce"
-                    ).sum()
-                    
-                    # Get jc amount
-                    jc_amount = pd.to_numeric(
-                        jc_df[(jc_df["BZID"] == bzid) & 
-                              (jc_df["Date"].dt.year == current_year) &
-                              (jc_df["Date"].dt.month <= current_month)]["Amount"],
-                        errors="coerce"
-                    ).sum()
-                    
-                    # Get manual amount
-                    manual_amount = pd.to_numeric(
-                        manual_df[(manual_df["BZID"] == bzid) & 
-                                  (manual_df["Date"].dt.year == current_year) &
-                                  (manual_df["Date"].dt.month <= current_month)]["Amount"],
-                        errors="coerce"
-                    ).sum()
-                    
-                    total_amount = cash_amount + jc_amount + manual_amount
-                    
-                    high_risk_customers.append({
-                        "BZID": bzid,
-                        "Total Refunds": sum(actual_counts),
-                        "Monthly Average": round(avg_refunds, 2),
-                        "Months with Data": months_with_data,
-                        "Total Amount (₹)": round(total_amount, 2),
-                        "Monthly Pattern": ", ".join([str(c) for c in actual_counts])
-                    })
-            
-            # Sort by total refunds (highest first)
-            high_risk_df = pd.DataFrame(high_risk_customers)
+            # Get high risk customers using optimized function
+            high_risk_df = get_high_risk_customers_optimized(
+                all_refunds, 
+                cash_df, 
+                jc_df, 
+                manual_df, 
+                current_year, 
+                current_month,
+                threshold=3
+            )
             
             if not high_risk_df.empty:
                 high_risk_df = high_risk_df.sort_values("Total Refunds", ascending=False)
