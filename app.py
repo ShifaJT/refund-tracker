@@ -623,7 +623,7 @@ with tab1:
                     <span style="font-size: 32px;">🚶</span>
                     <span style="font-size: 24px; margin-left: 10px;">❌</span>
                     <p style="margin: 5px 0 0 0; font-size: 14px; color: #721c24;">
-                        Limit reached! Walk away from this request.
+                        Limit reached! Don't approve this request.
                     </p>
                 </div>
                 """, unsafe_allow_html=True)
