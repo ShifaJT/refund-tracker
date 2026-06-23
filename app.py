@@ -66,6 +66,13 @@ st.markdown("""
         margin: 5px 0 0 0;
         font-size: 18px;
     }
+    .info-box {
+        background-color: #e7f3ff;
+        border-left: 4px solid #2196F3;
+        padding: 15px;
+        border-radius: 5px;
+        margin: 10px 0;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -279,7 +286,7 @@ def get_high_risk_customers_optimized(all_refunds, cash_df, jc_df, manual_df, ye
                 "BZID": bzid,
                 "Total Refunds": sum(monthly_counts),
                 "Monthly Average": round(avg_refunds, 2),
-                "Months with Data": len([c for c in monthly_counts if c > 0]),
+                "Months Active": len([c for c in monthly_counts if c > 0]),
                 "Total Amount (₹)": round(total_amount, 2),
                 **monthly_breakdown  # Add each month as a separate column
             })
@@ -735,15 +742,19 @@ with tab1:
 # ================= TAB 2: High Risk Customers =================
 with tab2:
     st.markdown("## 🚨 High Risk Customers")
-    st.info("""
-    **What does this table show?**
-    - Customers who average **3+ refunds per month** OR have **3+ refunds in every month**
-    - Each column shows refunds for a specific month (Jan, Feb, Mar, etc.)
-    - **Total Refunds** = Sum of all monthly refunds
-    - **Monthly Average** = Average refunds per month
-    - **Months with Data** = Number of months with at least 1 refund
-    - **Total Amount** = Total money refunded to this customer
-    """)
+    
+    # Add explanation box
+    st.markdown("""
+    <div class="info-box">
+        <b>📖 Understanding this table:</b><br>
+        • <b>High Risk</b> = Customers with <b>3+ refunds per month on average</b> OR <b>3+ refunds in every month</b><br>
+        • <b>Total Refunds</b> = Total refunds given to this customer from Jan to current month<br>
+        • <b>Avg/Month</b> = Average refunds per month (Total Refunds ÷ Number of months)<br>
+        • <b>Months Active</b> = Number of months where customer had at least 1 refund<br>
+        • <b>Jan, Feb, Mar...</b> = Refund count in each specific month<br>
+        • <span style="color: #cc0000; font-weight: bold;">Red numbers</span> = 3+ refunds in that month (⚠️ High Risk)
+    </div>
+    """, unsafe_allow_html=True)
     
     # Load data once and cache it
     @st.cache_data(ttl=300)
@@ -883,7 +894,7 @@ with tab2:
         with col1:
             st.metric("Total High Risk Customers", len(high_risk_df))
         with col2:
-            st.metric("Total Refunds (All)", high_risk_df["Total Refunds"].sum())
+            st.metric("Total Refunds (All)", int(high_risk_df["Total Refunds"].sum()))
         with col3:
             st.metric("Total Amount (All)", f"₹{high_risk_df['Total Amount (₹)'].sum():,.2f}")
         
@@ -894,9 +905,9 @@ with tab2:
         # Create column config for better display
         column_config = {
             "BZID": st.column_config.TextColumn("BZID", help="Customer Business ID"),
-            "Total Refunds": st.column_config.NumberColumn("Total Refunds", help="Total refunds year-to-date"),
+            "Total Refunds": st.column_config.NumberColumn("Total Refunds", help="Total refunds year-to-date", format="%d"),
             "Monthly Average": st.column_config.NumberColumn("Avg/Month", help="Average refunds per month", format="%.2f"),
-            "Months with Data": st.column_config.NumberColumn("Months Active", help="Number of months with at least 1 refund"),
+            "Months Active": st.column_config.NumberColumn("Months Active", help="Number of months with at least 1 refund", format="%d"),
             "Total Amount (₹)": st.column_config.NumberColumn("Total Amount", help="Total amount refunded", format="₹%.2f"),
         }
         
@@ -905,7 +916,8 @@ with tab2:
             column_config[month] = st.column_config.NumberColumn(
                 month, 
                 help=f"Refunds in {month}",
-                width="small"
+                width="small",
+                format="%d"
             )
         
         # Display the dataframe with month columns
@@ -989,3 +1001,7 @@ with tab2:
             st.bar_chart(monthly_df.set_index("Month")["Refunds"])
     elif st.session_state.high_risk_data is not None and st.session_state.high_risk_data.empty:
         st.info("✅ No high-risk customers found! All customers have less than 3 refunds per month on average.")
+
+# ================= FOOTER =================
+st.markdown("---")
+st.caption("💰 Refund Tracker | Made with ❤️")
