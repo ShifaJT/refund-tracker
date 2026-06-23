@@ -79,6 +79,9 @@ st.markdown("""
         padding: 15px;
         margin: 5px;
     }
+    .high-risk-row {
+        background-color: #fff3cd;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -868,11 +871,19 @@ with tab2:
                 with col3:
                     st.metric("Total Amount (All)", f"₹{high_risk_df['Total Amount (₹)'].sum():,.2f}")
                 
-                # Display the dataframe with highlighting
+                # Display the dataframe with custom styling (no matplotlib dependency)
                 st.dataframe(
-                    high_risk_df.style.background_gradient(subset=["Total Refunds"], cmap="RdYlGn_r"),
+                    high_risk_df,
                     use_container_width=True,
-                    hide_index=True
+                    hide_index=True,
+                    column_config={
+                        "BZID": st.column_config.TextColumn("BZID"),
+                        "Total Refunds": st.column_config.NumberColumn("Total Refunds", help="Total refunds year-to-date"),
+                        "Monthly Average": st.column_config.NumberColumn("Monthly Average", help="Average refunds per month", format="%.2f"),
+                        "Months with Data": st.column_config.NumberColumn("Months with Data", help="Number of months with at least 1 refund"),
+                        "Total Amount (₹)": st.column_config.NumberColumn("Total Amount (₹)", help="Total amount refunded", format="₹%.2f"),
+                        "Monthly Pattern": st.column_config.TextColumn("Monthly Pattern", help="Refund count for each month")
+                    }
                 )
                 
                 # Download button
@@ -906,8 +917,12 @@ with tab2:
                     
                     monthly_df = pd.DataFrame(monthly_data)
                     
+                    # Use simple bar chart instead of styled dataframe
+                    st.bar_chart(monthly_df.set_index("Month"))
+                    
+                    # Also show as table
                     st.dataframe(
-                        monthly_df.style.bar(subset=["Refunds"], color="#f093fb"),
+                        monthly_df,
                         use_container_width=True,
                         hide_index=True
                     )
