@@ -185,6 +185,43 @@ def get_monthly_counts(df, bzid, year):
         month_names.append(datetime(year, month, 1).strftime("%B"))
     return month_names, monthly_counts
 
+# ================= GET MONTHLY AMOUNTS =================
+def get_monthly_amounts(cash_df, jc_df, manual_df, bzid, year, current_month):
+    """Get total amount refunded per month"""
+    monthly_amounts = {}
+    
+    for month in range(1, current_month + 1):
+        total_amount = 0
+        
+        # Cash/UPI amount for this month
+        cash_amount = pd.to_numeric(
+            cash_df[(cash_df["BZID"] == bzid) & 
+                    (cash_df["Date"].dt.year == year) &
+                    (cash_df["Date"].dt.month == month)]["Amount"],
+            errors="coerce"
+        ).sum()
+        
+        # Jumbocash amount for this month
+        jc_amount = pd.to_numeric(
+            jc_df[(jc_df["BZID"] == bzid) & 
+                  (jc_df["Date"].dt.year == year) &
+                  (jc_df["Date"].dt.month == month)]["Amount"],
+            errors="coerce"
+        ).sum()
+        
+        # Manual Cash amount for this month
+        manual_amount = pd.to_numeric(
+            manual_df[(manual_df["BZID"] == bzid) & 
+                      (manual_df["Date"].dt.year == year) &
+                      (manual_df["Date"].dt.month == month)]["Amount"],
+            errors="coerce"
+        ).sum()
+        
+        total_amount = cash_amount + jc_amount + manual_amount
+        monthly_amounts[month] = round(total_amount, 2)
+    
+    return monthly_amounts
+
 # ================= OPTIMIZED: GET HIGH RISK CUSTOMERS =================
 @st.cache_data(ttl=300)
 def get_high_risk_customers_optimized(all_refunds, cash_df, jc_df, manual_df, year, current_month):
@@ -238,10 +275,10 @@ def get_high_risk_customers_optimized(all_refunds, cash_df, jc_df, manual_df, ye
         if sum(monthly_counts) == 0:
             continue
         
-        # NEW CRITERIA: Count months with refunds (count > 0)
+        # Count months with refunds (count > 0)
         months_with_refunds = sum(1 for count in monthly_counts if count > 0)
         
-        # NEW: Check if customer has refunds in 3 or more months
+        # Check if customer has refunds in 3 or more months
         has_3_or_more_months = months_with_refunds >= 3
         
         # Flag if high risk (has refunds in 3+ months)
@@ -273,10 +310,19 @@ def get_high_risk_customers_optimized(all_refunds, cash_df, jc_df, manual_df, ye
             # Calculate average refunds per month
             avg_refunds = sum(monthly_counts) / current_month
             
-            # Create monthly breakdown with month names
+            # Get monthly amounts
+            monthly_amounts = get_monthly_amounts(cash_df, jc_df, manual_df, bzid, year, current_month)
+            
+            # Create monthly breakdown with counts and amounts
             monthly_breakdown = {}
             for i, count in enumerate(monthly_counts):
-                monthly_breakdown[month_abbr[i]] = int(count)
+                month_num = i + 1
+                if count > 0 and month_num in monthly_amounts:
+                    monthly_breakdown[month_abbr[i]] = f"{int(count)} [₹{monthly_amounts[month_num]:.0f}]"
+                elif count > 0:
+                    monthly_breakdown[month_abbr[i]] = f"{int(count)} [₹0]"
+                else:
+                    monthly_breakdown[month_abbr[i]] = "0"
             
             results.append({
                 "BZID": bzid,
@@ -751,7 +797,7 @@ with tab2:
         • <b>Avg/Month</b> = Average refunds per month (Total Refunds ÷ Number of months)<br>
         • <b>Months Active</b> = Number of months where customer had at least 1 refund<br>
         • <b>Cash/UPI, Jumbocash, Manual Cash</b> = Total amount refunded through each payment method<br>
-        • <b>Jan, Feb, Mar...</b> = Refund count in each specific month<br>
+        • <b>Jan, Feb, Mar...</b> = Refund count [Total amount in ₹] for each specific month<br>
         • <span style="color: #cc0000; font-weight: bold;">Red numbers</span> = 3+ refunds in that month (⚠️ High Risk)
     </div>
     """, unsafe_allow_html=True)
@@ -917,16 +963,14 @@ with tab2:
         
         # Add month columns to config
         for month in month_abbr:
-            column_config[month] = st.column_config.NumberColumn(
+            column_config[month] = st.column_config.TextColumn(
                 month, 
-                help=f"Refunds in {month}",
-                width="small",
-                format="%d"
+                help=f"Refunds [Amount] in {month}"
             )
         
         # Display the dataframe with month columns
         st.markdown("### 📊 Customer Monthly Refund Breakdown")
-        st.markdown("*Each column shows refunds per month. Red numbers indicate 3+ refunds in that month.*")
+        st.markdown("*Each column shows: Refund Count [Total Amount in ₹] for each month. Red numbers indicate 3+ refunds in that month.*")
         
         # Apply color styling to the dataframe
         def highlight_high_risk(row):
@@ -934,9 +978,11 @@ with tab2:
             for i, col in enumerate(row.index):
                 if col in month_abbr:
                     try:
-                        val = int(row[col])
-                        if val >= 3:
-                            styles[i] = 'background-color: #ffcccc; font-weight: bold; color: #cc0000;'
+                        val = str(row[col])
+                        if '[' in val and val.split('[')[0].strip().isdigit():
+                            count = int(val.split('[')[0].strip())
+                            if count >= 3:
+                                styles[i] = 'background-color: #ffcccc; font-weight: bold; color: #cc0000;'
                     except:
                         pass
             return styles
@@ -976,6 +1022,32 @@ with tab2:
             # Get payment method breakdown for selected customer
             customer_row = high_risk_df[high_risk_df["BZID"] == selected_bzid].iloc[0]
             
+            # Get monthly amounts
+            monthly_amounts = {}
+            for month in range(1, current_month + 1):
+                cash_amount = pd.to_numeric(
+                    cash_df[(cash_df["BZID"] == selected_bzid) & 
+                            (cash_df["Date"].dt.year == current_year) &
+                            (cash_df["Date"].dt.month == month)]["Amount"],
+                    errors="coerce"
+                ).sum()
+                
+                jc_amount = pd.to_numeric(
+                    jc_df[(jc_df["BZID"] == selected_bzid) & 
+                          (jc_df["Date"].dt.year == current_year) &
+                          (jc_df["Date"].dt.month == month)]["Amount"],
+                    errors="coerce"
+                ).sum()
+                
+                manual_amount = pd.to_numeric(
+                    manual_df[(manual_df["BZID"] == selected_bzid) & 
+                              (manual_df["Date"].dt.year == current_year) &
+                              (manual_df["Date"].dt.month == month)]["Amount"],
+                    errors="coerce"
+                ).sum()
+                
+                monthly_amounts[month] = round(cash_amount + jc_amount + manual_amount, 2)
+            
             # Create monthly breakdown for this customer
             monthly_data = []
             total_refunds = 0
@@ -985,9 +1057,12 @@ with tab2:
                 total_refunds += count
                 if count > 0:
                     months_with_refunds += 1
+                amount = monthly_amounts.get(i + 1, 0)
                 monthly_data.append({
                     "Month": month,
                     "Refunds": count,
+                    "Amount (₹)": amount,
+                    "Display": f"{count} [₹{amount:.0f}]" if count > 0 else "0",
                     "Status": "⚠️ High" if count >= 3 else "✅ Normal"
                 })
             
@@ -1008,11 +1083,18 @@ with tab2:
             - 📦 Total: **₹{customer_row['Total_Amount']:,.2f}**
             """)
             
-            # Display monthly breakdown
+            # Display monthly breakdown with amount column
+            display_cols = ["Month", "Refunds", "Amount (₹)", "Status"]
             st.dataframe(
-                monthly_df,
+                monthly_df[display_cols],
                 use_container_width=True,
-                hide_index=True
+                hide_index=True,
+                column_config={
+                    "Month": st.column_config.TextColumn("Month"),
+                    "Refunds": st.column_config.NumberColumn("Refund Count", format="%d"),
+                    "Amount (₹)": st.column_config.NumberColumn("Total Amount", format="₹%.2f"),
+                    "Status": st.column_config.TextColumn("Status")
+                }
             )
     elif st.session_state.high_risk_data is not None and st.session_state.high_risk_data.empty:
         st.info("✅ No high-risk customers found! No customer has refunds in 3 or more months.")
