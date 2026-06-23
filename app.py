@@ -187,9 +187,10 @@ def get_monthly_counts(df, bzid, year):
 
 # ================= OPTIMIZED: GET HIGH RISK CUSTOMERS =================
 @st.cache_data(ttl=300)
-def get_high_risk_customers_optimized(all_refunds, cash_df, jc_df, manual_df, year, current_month, threshold=3):
+def get_high_risk_customers_optimized(all_refunds, cash_df, jc_df, manual_df, year, current_month):
     """
-    Optimized version to find high risk customers using vectorized operations
+    Optimized version to find high risk customers based on:
+    - Count of months with refunds >= 3
     """
     if all_refunds.empty or current_month is None:
         return pd.DataFrame(), pd.DataFrame()
@@ -237,17 +238,14 @@ def get_high_risk_customers_optimized(all_refunds, cash_df, jc_df, manual_df, ye
         if sum(monthly_counts) == 0:
             continue
         
-        # Calculate average
-        avg_refunds = sum(monthly_counts) / current_month
+        # NEW CRITERIA: Count months with refunds (count > 0)
+        months_with_refunds = sum(1 for count in monthly_counts if count > 0)
         
-        # Check if every month has 3+ refunds
-        all_months_above_threshold = all(count >= threshold for count in monthly_counts)
+        # NEW: Check if customer has refunds in 3 or more months
+        has_3_or_more_months = months_with_refunds >= 3
         
-        # Check if average is 3 or more
-        avg_above_threshold = avg_refunds >= threshold
-        
-        # Flag if high risk
-        if avg_above_threshold or all_months_above_threshold:
+        # Flag if high risk (has refunds in 3+ months)
+        if has_3_or_more_months:
             # Get amounts by payment type
             cash_amount = pd.to_numeric(
                 cash_df[(cash_df["BZID"] == bzid) & 
@@ -272,6 +270,9 @@ def get_high_risk_customers_optimized(all_refunds, cash_df, jc_df, manual_df, ye
             
             total_amount = cash_amount + jc_amount + manual_amount
             
+            # Calculate average refunds per month
+            avg_refunds = sum(monthly_counts) / current_month
+            
             # Create monthly breakdown with month names
             monthly_breakdown = {}
             for i, count in enumerate(monthly_counts):
@@ -281,7 +282,7 @@ def get_high_risk_customers_optimized(all_refunds, cash_df, jc_df, manual_df, ye
                 "BZID": bzid,
                 "Total Refunds": sum(monthly_counts),
                 "Monthly Average": round(avg_refunds, 2),
-                "Months Active": len([c for c in monthly_counts if c > 0]),
+                "Months Active": months_with_refunds,
                 "Cash_UPI": round(cash_amount, 2),
                 "Jumbocash": round(jc_amount, 2),
                 "Manual_Cash": round(manual_amount, 2),
@@ -741,11 +742,11 @@ with tab1:
 with tab2:
     st.markdown("## 🚨 High Risk Customers")
     
-    # Add explanation box
+    # Add explanation box with updated criteria
     st.markdown("""
     <div class="info-box">
-        <b>📖 Understanding this table:</b><br>
-        • <b>High Risk</b> = Customers with <b>3+ refunds per month on average</b> OR <b>3+ refunds in every month</b><br>
+        <b>📖 Updated Criteria - High Risk Customers:</b><br>
+        • <b>High Risk</b> = Customers who have <b>refunds in 3 or more months</b> (Jan to current month)<br>
         • <b>Total Refunds</b> = Total refunds given to this customer from Jan to current month<br>
         • <b>Avg/Month</b> = Average refunds per month (Total Refunds ÷ Number of months)<br>
         • <b>Months Active</b> = Number of months where customer had at least 1 refund<br>
@@ -866,15 +867,14 @@ with tab2:
             # Store in session state
             st.session_state.all_refunds_data = all_refunds
             
-            # Get high risk customers using optimized function
+            # Get high risk customers using updated criteria
             high_risk_df, _ = get_high_risk_customers_optimized(
                 all_refunds, 
                 cash_df, 
                 jc_df, 
                 manual_df, 
                 current_year, 
-                current_month,
-                threshold=3
+                current_month
             )
             
             st.session_state.high_risk_data = high_risk_df
@@ -888,7 +888,7 @@ with tab2:
         
         st.success(f"Found {len(high_risk_df)} high-risk customers")
         
-        # Display metrics - using the correct column names (without special characters)
+        # Display metrics
         col1, col2, col3, col4 = st.columns(4)
         with col1:
             st.metric("Total High Risk Customers", len(high_risk_df))
@@ -941,9 +941,7 @@ with tab2:
                         pass
             return styles
         
-        # Rename columns for display (but keep internal names)
         display_df = high_risk_df.copy()
-        
         styled_df = display_df.style.apply(highlight_high_risk, axis=1)
         
         st.dataframe(
@@ -981,9 +979,12 @@ with tab2:
             # Create monthly breakdown for this customer
             monthly_data = []
             total_refunds = 0
+            months_with_refunds = 0
             for i, month in enumerate(month_abbr):
                 count = monthly_counts[i]
                 total_refunds += count
+                if count > 0:
+                    months_with_refunds += 1
                 monthly_data.append({
                     "Month": month,
                     "Refunds": count,
@@ -997,7 +998,8 @@ with tab2:
             **Customer Summary:**
             - Total Refunds: **{total_refunds}**  
             - Average per month: **{total_refunds/current_month:.2f}**  
-            - Months with refunds: **{len([m for m in monthly_data if m['Refunds'] > 0])}** out of {current_month}
+            - Months with refunds: **{months_with_refunds}** out of {current_month}
+            - Risk Status: **{'🔴 HIGH RISK' if months_with_refunds >= 3 else '✅ Normal'}**
             
             **Payment Method Breakdown:**
             - 💳 Cash/UPI: **₹{customer_row['Cash_UPI']:,.2f}**
@@ -1013,7 +1015,7 @@ with tab2:
                 hide_index=True
             )
     elif st.session_state.high_risk_data is not None and st.session_state.high_risk_data.empty:
-        st.info("✅ No high-risk customers found! All customers have less than 3 refunds per month on average.")
+        st.info("✅ No high-risk customers found! No customer has refunds in 3 or more months.")
 
 # ================= FOOTER =================
 st.markdown("---")
