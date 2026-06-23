@@ -232,6 +232,10 @@ def get_high_risk_customers_optimized(all_refunds, cash_df, jc_df, manual_df, ye
     # Sort columns
     bzid_monthly = bzid_monthly[sorted(bzid_monthly.columns)]
     
+    # Month names for display
+    month_abbr = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", 
+                  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    
     # Calculate metrics for each BZID
     results = []
     
@@ -282,13 +286,18 @@ def get_high_risk_customers_optimized(all_refunds, cash_df, jc_df, manual_df, ye
             
             total_amount = cash_amount + jc_amount + manual_amount
             
+            # Create monthly breakdown with month names
+            monthly_breakdown = {}
+            for i, count in enumerate(monthly_counts):
+                monthly_breakdown[month_abbr[i]] = int(count)
+            
             results.append({
                 "BZID": bzid,
                 "Total Refunds": sum(monthly_counts),
                 "Monthly Average": round(avg_refunds, 2),
                 "Months with Data": len([c for c in monthly_counts if c > 0]),
                 "Total Amount (₹)": round(total_amount, 2),
-                "Monthly Pattern": ", ".join([str(int(c)) for c in monthly_counts])
+                **monthly_breakdown  # Add each month as a separate column
             })
     
     return pd.DataFrame(results)
@@ -742,7 +751,15 @@ with tab1:
 # ================= TAB 2: High Risk Customers =================
 with tab2:
     st.markdown("## 🚨 High Risk Customers")
-    st.info("Customers who average 3+ refunds per month or have 3+ refunds every month")
+    st.info("""
+    **What does this table show?**
+    - Customers who average **3+ refunds per month** OR have **3+ refunds in every month**
+    - Each column shows refunds for a specific month (Jan, Feb, Mar, etc.)
+    - **Total Refunds** = Sum of all monthly refunds
+    - **Monthly Average** = Average refunds per month
+    - **Months with Data** = Number of months with at least 1 refund
+    - **Total Amount** = Total money refunded to this customer
+    """)
     
     # Load data once and cache it
     @st.cache_data(ttl=300)
@@ -871,19 +888,51 @@ with tab2:
                 with col3:
                     st.metric("Total Amount (All)", f"₹{high_risk_df['Total Amount (₹)'].sum():,.2f}")
                 
-                # Display the dataframe with custom styling (no matplotlib dependency)
+                # Get month columns for display
+                month_abbr = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", 
+                              "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][:current_month]
+                
+                # Create column config for better display
+                column_config = {
+                    "BZID": st.column_config.TextColumn("BZID", help="Customer Business ID"),
+                    "Total Refunds": st.column_config.NumberColumn("Total Refunds", help="Total refunds year-to-date"),
+                    "Monthly Average": st.column_config.NumberColumn("Avg/Month", help="Average refunds per month", format="%.2f"),
+                    "Months with Data": st.column_config.NumberColumn("Months Active", help="Number of months with at least 1 refund"),
+                    "Total Amount (₹)": st.column_config.NumberColumn("Total Amount", help="Total amount refunded", format="₹%.2f"),
+                }
+                
+                # Add month columns to config
+                for month in month_abbr:
+                    column_config[month] = st.column_config.NumberColumn(
+                        month, 
+                        help=f"Refunds in {month}",
+                        width="small"
+                    )
+                
+                # Display the dataframe with month columns
+                st.markdown("### 📊 Customer Monthly Refund Breakdown")
+                st.markdown("*Each column shows refunds per month. Red numbers indicate 3+ refunds in that month.*")
+                
+                # Apply color styling to the dataframe
+                def highlight_high_risk(row):
+                    styles = ['' for _ in range(len(row))]
+                    for i, col in enumerate(row.index):
+                        if col in month_abbr:
+                            try:
+                                val = int(row[col])
+                                if val >= 3:
+                                    styles[i] = 'background-color: #ffcccc; font-weight: bold; color: #cc0000;'
+                            except:
+                                pass
+                    return styles
+                
+                styled_df = high_risk_df.style.apply(highlight_high_risk, axis=1)
+                
                 st.dataframe(
-                    high_risk_df,
+                    styled_df,
                     use_container_width=True,
                     hide_index=True,
-                    column_config={
-                        "BZID": st.column_config.TextColumn("BZID"),
-                        "Total Refunds": st.column_config.NumberColumn("Total Refunds", help="Total refunds year-to-date"),
-                        "Monthly Average": st.column_config.NumberColumn("Monthly Average", help="Average refunds per month", format="%.2f"),
-                        "Months with Data": st.column_config.NumberColumn("Months with Data", help="Number of months with at least 1 refund"),
-                        "Total Amount (₹)": st.column_config.NumberColumn("Total Amount (₹)", help="Total amount refunded", format="₹%.2f"),
-                        "Monthly Pattern": st.column_config.TextColumn("Monthly Pattern", help="Refund count for each month")
-                    }
+                    column_config=column_config
                 )
                 
                 # Download button
@@ -897,6 +946,8 @@ with tab2:
                 
                 # Show individual customer breakdown
                 st.markdown("### 📊 Individual Customer Monthly Breakdown")
+                st.markdown("*Select a BZID below to see their refund pattern in detail.*")
+                
                 selected_bzid = st.selectbox(
                     "Select BZID to view details",
                     high_risk_df["BZID"].tolist()
@@ -908,23 +959,34 @@ with tab2:
                     
                     # Create monthly breakdown for this customer
                     monthly_data = []
-                    for i, month in enumerate(["Jan", "Feb", "Mar", "Apr", "May", "Jun", 
-                                               "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][:current_month]):
+                    total_refunds = 0
+                    for i, month in enumerate(month_abbr):
+                        count = monthly_counts[i]
+                        total_refunds += count
                         monthly_data.append({
                             "Month": month,
-                            "Refunds": monthly_counts[i]
+                            "Refunds": count,
+                            "Status": "⚠️ High" if count >= 3 else "✅ Normal"
                         })
                     
                     monthly_df = pd.DataFrame(monthly_data)
                     
-                    # Use simple bar chart instead of styled dataframe
-                    st.bar_chart(monthly_df.set_index("Month"))
+                    # Show summary for selected customer
+                    st.info(f"""
+                    **Customer Summary:**
+                    - Total Refunds: **{total_refunds}**  
+                    - Average per month: **{total_refunds/current_month:.2f}**  
+                    - Months with refunds: **{len([m for m in monthly_data if m['Refunds'] > 0])}** out of {current_month}
+                    """)
                     
-                    # Also show as table
+                    # Display monthly breakdown
                     st.dataframe(
                         monthly_df,
                         use_container_width=True,
                         hide_index=True
                     )
+                    
+                    # Show as bar chart
+                    st.bar_chart(monthly_df.set_index("Month")["Refunds"])
             else:
                 st.info("✅ No high-risk customers found! All customers have less than 3 refunds per month on average.")
