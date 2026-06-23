@@ -248,10 +248,7 @@ def get_high_risk_customers_optimized(all_refunds, cash_df, jc_df, manual_df, ye
         
         # Flag if high risk
         if avg_above_threshold or all_months_above_threshold:
-            # Get total amount refunded
-            total_amount = 0
-            
-            # Get cash amount
+            # Get amounts by payment type
             cash_amount = pd.to_numeric(
                 cash_df[(cash_df["BZID"] == bzid) & 
                         (cash_df["Date"].dt.year == year) &
@@ -259,7 +256,6 @@ def get_high_risk_customers_optimized(all_refunds, cash_df, jc_df, manual_df, ye
                 errors="coerce"
             ).sum()
             
-            # Get jc amount
             jc_amount = pd.to_numeric(
                 jc_df[(jc_df["BZID"] == bzid) & 
                       (jc_df["Date"].dt.year == year) &
@@ -267,7 +263,6 @@ def get_high_risk_customers_optimized(all_refunds, cash_df, jc_df, manual_df, ye
                 errors="coerce"
             ).sum()
             
-            # Get manual amount
             manual_amount = pd.to_numeric(
                 manual_df[(manual_df["BZID"] == bzid) & 
                           (manual_df["Date"].dt.year == year) &
@@ -287,6 +282,9 @@ def get_high_risk_customers_optimized(all_refunds, cash_df, jc_df, manual_df, ye
                 "Total Refunds": sum(monthly_counts),
                 "Monthly Average": round(avg_refunds, 2),
                 "Months Active": len([c for c in monthly_counts if c > 0]),
+                "Cash/UPI (₹)": round(cash_amount, 2),
+                "Jumbocash (₹)": round(jc_amount, 2),
+                "Manual Cash (₹)": round(manual_amount, 2),
                 "Total Amount (₹)": round(total_amount, 2),
                 **monthly_breakdown  # Add each month as a separate column
             })
@@ -751,6 +749,7 @@ with tab2:
         • <b>Total Refunds</b> = Total refunds given to this customer from Jan to current month<br>
         • <b>Avg/Month</b> = Average refunds per month (Total Refunds ÷ Number of months)<br>
         • <b>Months Active</b> = Number of months where customer had at least 1 refund<br>
+        • <b>Cash/UPI, Jumbocash, Manual Cash</b> = Total amount refunded through each payment method<br>
         • <b>Jan, Feb, Mar...</b> = Refund count in each specific month<br>
         • <span style="color: #cc0000; font-weight: bold;">Red numbers</span> = 3+ refunds in that month (⚠️ High Risk)
     </div>
@@ -890,13 +889,15 @@ with tab2:
         st.success(f"Found {len(high_risk_df)} high-risk customers")
         
         # Display metrics
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         with col1:
             st.metric("Total High Risk Customers", len(high_risk_df))
         with col2:
             st.metric("Total Refunds (All)", int(high_risk_df["Total Refunds"].sum()))
         with col3:
-            st.metric("Total Amount (All)", f"₹{high_risk_df['Total Amount (₹)'].sum():,.2f}")
+            st.metric("Total Cash/UPI", f"₹{high_risk_df['Cash/UPI (₹)'].sum():,.2f}")
+        with col4:
+            st.metric("Total Jumbocash", f"₹{high_risk_df['Jumbocash (₹)'].sum():,.2f}")
         
         # Get month columns for display
         month_abbr = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", 
@@ -908,7 +909,10 @@ with tab2:
             "Total Refunds": st.column_config.NumberColumn("Total Refunds", help="Total refunds year-to-date", format="%d"),
             "Monthly Average": st.column_config.NumberColumn("Avg/Month", help="Average refunds per month", format="%.2f"),
             "Months Active": st.column_config.NumberColumn("Months Active", help="Number of months with at least 1 refund", format="%d"),
-            "Total Amount (₹)": st.column_config.NumberColumn("Total Amount", help="Total amount refunded", format="₹%.2f"),
+            "Cash/UPI (₹)": st.column_config.NumberColumn("Cash/UPI", help="Total amount refunded via Cash/UPI", format="₹%.2f"),
+            "Jumbocash (₹)": st.column_config.NumberColumn("Jumbocash", help="Total amount refunded via Jumbocash", format="₹%.2f"),
+            "Manual Cash (₹)": st.column_config.NumberColumn("Manual Cash", help="Total amount refunded via Manual Cash", format="₹%.2f"),
+            "Total Amount (₹)": st.column_config.NumberColumn("Total Amount", help="Total amount refunded across all methods", format="₹%.2f"),
         }
         
         # Add month columns to config
@@ -968,6 +972,9 @@ with tab2:
             # Get monthly counts for selected customer
             _, monthly_counts = get_monthly_counts(all_refunds, selected_bzid, current_year)
             
+            # Get payment method breakdown for selected customer
+            customer_row = high_risk_df[high_risk_df["BZID"] == selected_bzid].iloc[0]
+            
             # Create monthly breakdown for this customer
             monthly_data = []
             total_refunds = 0
@@ -982,15 +989,21 @@ with tab2:
             
             monthly_df = pd.DataFrame(monthly_data)
             
-            # Show summary for selected customer
+            # Show summary for selected customer with payment breakdown
             st.info(f"""
             **Customer Summary:**
             - Total Refunds: **{total_refunds}**  
             - Average per month: **{total_refunds/current_month:.2f}**  
             - Months with refunds: **{len([m for m in monthly_data if m['Refunds'] > 0])}** out of {current_month}
+            
+            **Payment Method Breakdown:**
+            - 💳 Cash/UPI: **₹{customer_row['Cash/UPI (₹)']:,.2f}**
+            - 🏦 Jumbocash: **₹{customer_row['Jumbocash (₹)']:,.2f}**
+            - 💵 Manual Cash: **₹{customer_row['Manual Cash (₹)']:,.2f}**
+            - 📦 Total: **₹{customer_row['Total Amount (₹)']:,.2f}**
             """)
             
-            # Display monthly breakdown (without bar chart)
+            # Display monthly breakdown
             st.dataframe(
                 monthly_df,
                 use_container_width=True,
