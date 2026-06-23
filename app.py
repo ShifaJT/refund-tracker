@@ -66,37 +66,18 @@ st.markdown("""
         margin: 5px 0 0 0;
         font-size: 18px;
     }
-    .section-header {
-        border-bottom: 2px solid #e0e0e0;
-        padding-bottom: 10px;
-        margin-top: 30px;
-        margin-bottom: 20px;
+    .high-risk-card {
+        background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+        border-radius: 10px;
+        padding: 15px;
+        color: white;
+        margin: 5px;
     }
-    .details-tabs {
-        margin-top: 10px;
-    }
-    .walking-man {
-        font-size: 48px;
-        display: inline-block;
-        animation: walk 0.5s infinite alternate;
-    }
-    @keyframes walk {
-        0% { transform: translateX(0px); }
-        100% { transform: translateX(5px); }
-    }
-    .tick-mark {
-        font-size: 48px;
-        display: inline-block;
-        animation: bounce 0.5s ease;
-    }
-    @keyframes bounce {
-        0% { transform: scale(0); }
-        50% { transform: scale(1.3); }
-        100% { transform: scale(1); }
-    }
-    .cross-mark {
-        font-size: 48px;
-        display: inline-block;
+    .warning-card {
+        background: linear-gradient(135deg, #ffecd2 0%, #fcb69f 100%);
+        border-radius: 10px;
+        padding: 15px;
+        margin: 5px;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -210,565 +191,737 @@ def get_monthly_counts(df, bzid, year):
         month_names.append(datetime(year, month, 1).strftime("%B"))
     return month_names, monthly_counts
 
+# ================= GET HIGH RISK CUSTOMERS =================
+def get_high_risk_customers(all_refunds, year, threshold=3, current_month=None):
+    """
+    Find customers who have taken 3+ refunds every month on average
+    or have 3+ refunds in each month so far
+    """
+    if all_refunds.empty or current_month is None:
+        return pd.DataFrame()
+    
+    # Get all unique BZIDs
+    all_bzids = all_refunds["BZID"].unique()
+    high_risk_customers = []
+    
+    for bzid in all_bzids:
+        # Get monthly counts for this customer
+        month_names, monthly_counts = get_monthly_counts(all_refunds, bzid, year)
+        
+        # Consider only months up to current month
+        actual_counts = monthly_counts[:current_month]
+        
+        # Calculate average refunds per month
+        avg_refunds = sum(actual_counts) / len(actual_counts) if actual_counts else 0
+        
+        # Check if customer has 3+ refunds in every month so far
+        all_months_above_threshold = all(count >= threshold for count in actual_counts) if actual_counts else False
+        
+        # Check if average is 3 or more
+        avg_above_threshold = avg_refunds >= threshold
+        
+        # Check if total refunds year-to-date is significant (3 or more per month average)
+        total_refunds = sum(actual_counts)
+        months_with_data = len([c for c in actual_counts if c > 0])
+        
+        # Flag if: average >= 3 OR every month has 3+ refunds
+        if avg_above_threshold or all_months_above_threshold:
+            # Get total amount refunded for this customer in the year
+            customer_data = all_refunds[
+                (all_refunds["BZID"] == bzid) &
+                (all_refunds["Date"].dt.year == year) &
+                (all_refunds["Date"].dt.month <= current_month)
+            ]
+            
+            # Get total amount
+            total_amount = 0
+            if not customer_data.empty:
+                # We need to get amount from original data - we'll fetch it differently
+                pass
+            
+            high_risk_customers.append({
+                "BZID": bzid,
+                "Total Refunds": total_refunds,
+                "Monthly Average": round(avg_refunds, 2),
+                "Months with Data": months_with_data,
+                "Monthly Counts": ", ".join([str(c) for c in actual_counts])
+            })
+    
+    return pd.DataFrame(high_risk_customers)
+
 # ================= REFRESH =================
 if st.button("🔄 Refresh Data"):
-
     st.cache_data.clear()
-
     st.rerun()
 
+# ================= TAB SELECTION =================
+tab1, tab2 = st.tabs(["🔍 Individual Search", "📊 High Risk Customers"])
 
-# ================= INPUT =================
-col1, col2 = st.columns(2)
+# ================= TAB 1: Individual Search =================
+with tab1:
+    # ================= INPUT =================
+    col1, col2 = st.columns(2)
 
-bzid_input = col1.text_input("Enter BZID")
+    bzid_input = col1.text_input("Enter BZID")
 
-current_year = datetime.now().year
-current_month = datetime.now().month
+    current_year = datetime.now().year
+    current_month = datetime.now().month
 
-month_options = {
-    datetime(current_year, i, 1).strftime("%B %Y"): i
-    for i in range(1, 13)
-}
+    month_options = {
+        datetime(current_year, i, 1).strftime("%B %Y"): i
+        for i in range(1, 13)
+    }
 
-selected_month_label = col2.selectbox(
-    "Select Month",
-    list(month_options.keys())
-)
+    selected_month_label = col2.selectbox(
+        "Select Month",
+        list(month_options.keys())
+    )
 
-month_input = month_options[selected_month_label]
+    month_input = month_options[selected_month_label]
 
-selected_year = int(selected_month_label.split()[-1])
+    selected_year = int(selected_month_label.split()[-1])
 
+    # ================= PROCESS =================
+    if st.button("Fetch Details"):
 
-# ================= PROCESS =================
-if st.button("Fetch Details"):
+        if not bzid_input:
+            st.warning("Enter BZID")
+            st.stop()
 
-    if not bzid_input:
+        bzid = bzid_input.strip().upper()
 
-        st.warning("Enter BZID")
-
-        st.stop()
-
-    bzid = bzid_input.strip().upper()
-
-    with st.spinner("Fetching data..."):
-        # ================= LOAD SHEETS =================
-
-        cash_df = load_sheet(
-            st.secrets["cash_upi_sheet_id"],
-            "Form Responses 1"
-        )
-
-        jc_df = load_sheet(
-            st.secrets["jumbocash_sheet_id"],
-            "Form Responses 1"
-        )
-
-        manual_df = load_sheet(
-            st.secrets["cash_upi_sheet_id"],
-            "cash refund"
-        )
-
-        # =====================================================
-        # CASH / UPI - Clean and prepare data
-        # =====================================================
-
-        cash_df["BZID"] = (
-            cash_df["Business ID"]
-            .astype(str)
-            .str.strip()
-            .str.upper()
-        )
-
-        cash_df["Date"] = pd.to_datetime(
-            cash_df["Date"],
-            errors="coerce"
-        )
-
-        if "Timestamp" in cash_df.columns:
-
-            cash_df["Date"] = cash_df["Date"].fillna(
-                pd.to_datetime(
-                    cash_df["Timestamp"],
-                    errors="coerce"
-                )
+        with st.spinner("Fetching data..."):
+            # ================= LOAD SHEETS =================
+            cash_df = load_sheet(
+                st.secrets["cash_upi_sheet_id"],
+                "Form Responses 1"
             )
 
-        # Current month matches (for approval/rejection)
-        cash_current_matches = cash_df[
+            jc_df = load_sheet(
+                st.secrets["jumbocash_sheet_id"],
+                "Form Responses 1"
+            )
 
-            (cash_df["BZID"] == bzid)
+            manual_df = load_sheet(
+                st.secrets["cash_upi_sheet_id"],
+                "cash refund"
+            )
 
-            &
+            # =====================================================
+            # CASH / UPI - Clean and prepare data
+            # =====================================================
 
-            (cash_df["Date"].notna())
+            cash_df["BZID"] = (
+                cash_df["Business ID"]
+                .astype(str)
+                .str.strip()
+                .str.upper()
+            )
 
-            &
-
-            (cash_df["Date"].dt.month == month_input)
-
-            &
-
-            (cash_df["Date"].dt.year == selected_year)
-
-        ]
-
-        # =====================================================
-        # JUMBOCASH - Clean and prepare data
-        # =====================================================
-
-        jc_df.columns = jc_df.columns.str.strip()
-
-        jc_df["BZID"] = (
-
-            jc_df["BZID"]
-
-            .astype(str)
-
-            .str.strip()
-
-            .str.upper()
-
-        )
-
-        if "date" in jc_df.columns:
-
-            jc_df["Date"] = pd.to_datetime(
-
-                jc_df["date"],
-
+            cash_df["Date"] = pd.to_datetime(
+                cash_df["Date"],
                 errors="coerce"
-
             )
 
-        elif "Date" in jc_df.columns:
-
-            jc_df["Date"] = pd.to_datetime(
-
-                jc_df["Date"],
-
-                errors="coerce"
-
-            )
-
-        else:
-
-            jc_df["Date"] = pd.NaT
-
-        if "Timestamp" in jc_df.columns:
-
-            jc_df["Date"] = jc_df["Date"].fillna(
-
-                pd.to_datetime(
-
-                    jc_df["Timestamp"],
-
-                    errors="coerce"
-
+            if "Timestamp" in cash_df.columns:
+                cash_df["Date"] = cash_df["Date"].fillna(
+                    pd.to_datetime(
+                        cash_df["Timestamp"],
+                        errors="coerce"
+                    )
                 )
 
+            cash_current_matches = cash_df[
+                (cash_df["BZID"] == bzid) &
+                (cash_df["Date"].notna()) &
+                (cash_df["Date"].dt.month == month_input) &
+                (cash_df["Date"].dt.year == selected_year)
+            ]
+
+            # =====================================================
+            # JUMBOCASH - Clean and prepare data
+            # =====================================================
+
+            jc_df.columns = jc_df.columns.str.strip()
+
+            jc_df["BZID"] = (
+                jc_df["BZID"]
+                .astype(str)
+                .str.strip()
+                .str.upper()
             )
 
-        jc_current_matches = jc_df[
-
-            (jc_df["BZID"] == bzid)
-
-            &
-
-            (jc_df["Date"].notna())
-
-            &
-
-            (jc_df["Date"].dt.month == month_input)
-
-            &
-
-            (jc_df["Date"].dt.year == selected_year)
-
-        ]
-
-        # =====================================================
-        # MANUAL CASH - Clean and prepare data
-        # =====================================================
-
-        manual_df["BZID"] = (
-
-            manual_df["BZID"]
-
-            .astype(str)
-
-            .str.strip()
-
-            .str.upper()
-
-        )
-
-        manual_df["Date"] = pd.to_datetime(
-
-            manual_df["Date"],
-
-            errors="coerce"
-
-        )
-
-        if "Timestamp" in manual_df.columns:
-
-            manual_df["Date"] = manual_df["Date"].fillna(
-
-                pd.to_datetime(
-
-                    manual_df["Timestamp"],
-
+            if "date" in jc_df.columns:
+                jc_df["Date"] = pd.to_datetime(
+                    jc_df["date"],
                     errors="coerce"
+                )
+            elif "Date" in jc_df.columns:
+                jc_df["Date"] = pd.to_datetime(
+                    jc_df["Date"],
+                    errors="coerce"
+                )
+            else:
+                jc_df["Date"] = pd.NaT
 
+            if "Timestamp" in jc_df.columns:
+                jc_df["Date"] = jc_df["Date"].fillna(
+                    pd.to_datetime(
+                        jc_df["Timestamp"],
+                        errors="coerce"
+                    )
                 )
 
+            jc_current_matches = jc_df[
+                (jc_df["BZID"] == bzid) &
+                (jc_df["Date"].notna()) &
+                (jc_df["Date"].dt.month == month_input) &
+                (jc_df["Date"].dt.year == selected_year)
+            ]
+
+            # =====================================================
+            # MANUAL CASH - Clean and prepare data
+            # =====================================================
+
+            manual_df["BZID"] = (
+                manual_df["BZID"]
+                .astype(str)
+                .str.strip()
+                .str.upper()
             )
 
-        manual_current_matches = manual_df[
-
-            (manual_df["BZID"] == bzid)
-
-            &
-
-            (manual_df["Date"].notna())
-
-            &
-
-            (manual_df["Date"].dt.month == month_input)
-
-            &
-
-            (manual_df["Date"].dt.year == selected_year)
-
-        ]
-
-        # =====================================================
-        # COUNTS FOR CURRENT MONTH (Decision)
-        # =====================================================
-
-        cash_count_current = (
-
-            cash_current_matches["Ticket Number"].nunique()
-
-            if not cash_current_matches.empty
-
-            else 0
-
-        )
-
-        jc_count_current = (
-
-            jc_current_matches["Ticket ID"].nunique()
-
-            if not jc_current_matches.empty
-
-            else 0
-
-        )
-
-        manual_count_current = (
-
-            manual_current_matches["Ticket No"].nunique()
-
-            if not manual_current_matches.empty
-
-            else 0
-
-        )
-
-        total_count_current = cash_count_current + jc_count_current + manual_count_current
-
-        # =====================================================
-        # AMOUNTS FOR CURRENT MONTH
-        # =====================================================
-
-        cash_amount_current = (
-
-            pd.to_numeric(
-
-                cash_current_matches["Amount"],
-
+            manual_df["Date"] = pd.to_datetime(
+                manual_df["Date"],
                 errors="coerce"
+            )
 
-            ).sum()
+            if "Timestamp" in manual_df.columns:
+                manual_df["Date"] = manual_df["Date"].fillna(
+                    pd.to_datetime(
+                        manual_df["Timestamp"],
+                        errors="coerce"
+                    )
+                )
 
-            if not cash_current_matches.empty
+            manual_current_matches = manual_df[
+                (manual_df["BZID"] == bzid) &
+                (manual_df["Date"].notna()) &
+                (manual_df["Date"].dt.month == month_input) &
+                (manual_df["Date"].dt.year == selected_year)
+            ]
 
-            else 0
+            # =====================================================
+            # COUNTS FOR CURRENT MONTH
+            # =====================================================
 
-        )
+            cash_count_current = (
+                cash_current_matches["Ticket Number"].nunique()
+                if not cash_current_matches.empty
+                else 0
+            )
 
-        jc_amount_current = (
+            jc_count_current = (
+                jc_current_matches["Ticket ID"].nunique()
+                if not jc_current_matches.empty
+                else 0
+            )
 
-            pd.to_numeric(
+            manual_count_current = (
+                manual_current_matches["Ticket No"].nunique()
+                if not manual_current_matches.empty
+                else 0
+            )
 
-                jc_current_matches["Amount"],
+            total_count_current = cash_count_current + jc_count_current + manual_count_current
 
-                errors="coerce"
+            # =====================================================
+            # AMOUNTS FOR CURRENT MONTH
+            # =====================================================
 
-            ).sum()
+            cash_amount_current = (
+                pd.to_numeric(
+                    cash_current_matches["Amount"],
+                    errors="coerce"
+                ).sum()
+                if not cash_current_matches.empty
+                else 0
+            )
 
-            if not jc_current_matches.empty
+            jc_amount_current = (
+                pd.to_numeric(
+                    jc_current_matches["Amount"],
+                    errors="coerce"
+                ).sum()
+                if not jc_current_matches.empty
+                else 0
+            )
 
-            else 0
+            manual_amount_current = (
+                pd.to_numeric(
+                    manual_current_matches["Amount"],
+                    errors="coerce"
+                ).sum()
+                if not manual_current_matches.empty
+                else 0
+            )
 
-        )
+            total_amount_current = cash_amount_current + jc_amount_current + manual_amount_current
 
-        manual_amount_current = (
-
-            pd.to_numeric(
-
-                manual_current_matches["Amount"],
-
-                errors="coerce"
-
-            ).sum()
-
-            if not manual_current_matches.empty
-
-            else 0
-
-        )
-
-        total_amount_current = cash_amount_current + jc_amount_current + manual_amount_current
+            # =====================================================
+            # GET YEARLY TREND DATA
+            # =====================================================
+            
+            all_refunds = pd.concat([
+                cash_df[["BZID", "Date"]],
+                jc_df[["BZID", "Date"]],
+                manual_df[["BZID", "Date"]]
+            ], ignore_index=True)
+            
+            current_year_count = get_refund_count_for_period(
+                all_refunds, 
+                bzid, 
+                current_year, 
+                start_month=1, 
+                end_month=current_month
+            )
+            
+            last_year_count = get_refund_count_for_period(
+                all_refunds, 
+                bzid, 
+                current_year - 1, 
+                start_month=1, 
+                end_month=current_month
+            )
+            
+            month_names, monthly_counts = get_monthly_counts(all_refunds, bzid, current_year)
 
         # =====================================================
-        # GET YEARLY TREND DATA (Jan to Current Month)
+        # DISPLAY: Individual Search Results
         # =====================================================
         
-        # Combine all dataframes for yearly trend analysis
-        all_refunds = pd.concat([
-            cash_df[["BZID", "Date"]],
-            jc_df[["BZID", "Date"]],
-            manual_df[["BZID", "Date"]]
-        ], ignore_index=True)
+        col_left, col_right = st.columns([1, 1])
         
-        # Get refund counts for current year and last year (Jan to current month)
-        current_year_count = get_refund_count_for_period(
-            all_refunds, 
-            bzid, 
-            current_year, 
-            start_month=1, 
-            end_month=current_month
-        )
-        
-        last_year_count = get_refund_count_for_period(
-            all_refunds, 
-            bzid, 
-            current_year - 1, 
-            start_month=1, 
-            end_month=current_month
-        )
-        
-        # Get monthly counts for current year
-        month_names, monthly_counts = get_monthly_counts(all_refunds, bzid, current_year)
+        with col_left:
+            st.markdown(f"## 📊 Current Month")
+            st.markdown(f"### {selected_month_label}")
 
-    # =====================================================
-    # MAIN LAYOUT: Left Column (Decision) & Right Column (Details)
-    # =====================================================
-    
-    col_left, col_right = st.columns([1, 1])
-    
-    with col_left:
-        # ========== LEFT COLUMN: Current Month Summary & Decision ==========
-        st.markdown(f"## 📊 Current Month")
-        st.markdown(f"### {selected_month_label}")
-
-        # Decision Card with Walking Man and Tick/Cross
-        if total_count_current <= 5:
-            st.markdown(f"""
-            <div class="decision-approve">
-                <div class="decision-icon tick-mark">✅</div>
-                <div class="decision-text">
-                    <h2 style="color: #28a745; margin: 0;">APPROVED</h2>
-                    <p style="font-size: 18px; margin: 5px 0;">Total Refunds: {total_count_current} (Within limit of 5)</p>
+            if total_count_current <= 5:
+                st.markdown(f"""
+                <div class="decision-approve">
+                    <div class="decision-icon tick-mark">✅</div>
+                    <div class="decision-text">
+                        <h2 style="color: #28a745; margin: 0;">APPROVED</h2>
+                        <p style="font-size: 18px; margin: 5px 0;">Total Refunds: {total_count_current} (Within limit of 5)</p>
+                    </div>
                 </div>
-            </div>
-            """, unsafe_allow_html=True)
-        else:
-            st.markdown(f"""
-            <div class="decision-deny">
-                <div class="decision-icon cross-mark">❌</div>
-                <div class="decision-text">
-                    <h2 style="color: #dc3545; margin: 0;">DENIED</h2>
-                    <p style="font-size: 18px; margin: 5px 0;">Total Refunds: {total_count_current} (Exceeds limit of 5)</p>
+                """, unsafe_allow_html=True)
+            else:
+                st.markdown(f"""
+                <div class="decision-deny">
+                    <div class="decision-icon cross-mark">❌</div>
+                    <div class="decision-text">
+                        <h2 style="color: #dc3545; margin: 0;">DENIED</h2>
+                        <p style="font-size: 18px; margin: 5px 0;">Total Refunds: {total_count_current} (Exceeds limit of 5)</p>
+                    </div>
                 </div>
-            </div>
-            """, unsafe_allow_html=True)
+                """, unsafe_allow_html=True)
 
-        # Add walking man animation for deny
-        if total_count_current > 5:
-            st.markdown("""
-            <div style="text-align: center; padding: 10px; background-color: #f8d7da; border-radius: 10px; margin-top: 10px;">
-                <span class="walking-man">🚶</span>
-                <span style="font-size: 24px; margin-left: 10px;">❌</span>
-                <p style="margin: 5px 0 0 0; font-size: 14px; color: #721c24;">
-                    Too many refunds! Walk away from this request.
-                </p>
-            </div>
-            """, unsafe_allow_html=True)
-        else:
-            st.markdown("""
-            <div style="text-align: center; padding: 10px; background-color: #d4edda; border-radius: 10px; margin-top: 10px;">
-                <span style="font-size: 32px;">✅</span>
-                <span style="font-size: 24px; margin-left: 10px;">👍</span>
-                <p style="margin: 5px 0 0 0; font-size: 14px; color: #155724;">
-                    All good! Proceed with the refund.
-                </p>
-            </div>
-            """, unsafe_allow_html=True)
+            if total_count_current > 5:
+                st.markdown("""
+                <div style="text-align: center; padding: 10px; background-color: #f8d7da; border-radius: 10px; margin-top: 10px;">
+                    <span style="font-size: 32px;">🚶</span>
+                    <span style="font-size: 24px; margin-left: 10px;">❌</span>
+                    <p style="margin: 5px 0 0 0; font-size: 14px; color: #721c24;">
+                        Too many refunds! Walk away from this request.
+                    </p>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.markdown("""
+                <div style="text-align: center; padding: 10px; background-color: #d4edda; border-radius: 10px; margin-top: 10px;">
+                    <span style="font-size: 32px;">✅</span>
+                    <span style="font-size: 24px; margin-left: 10px;">👍</span>
+                    <p style="margin: 5px 0 0 0; font-size: 14px; color: #155724;">
+                        All good! Proceed with the refund.
+                    </p>
+                </div>
+                """, unsafe_allow_html=True)
 
-        # Metrics in 2x2 grid
-        col1, col2 = st.columns(2)
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric(
+                    label="💳 Cash / UPI",
+                    value=cash_count_current,
+                    delta=f"₹{round(cash_amount_current, 2)}",
+                    delta_color="off"
+                )
+            
+            with col2:
+                st.metric(
+                    label="🏦 Jumbocash",
+                    value=jc_count_current,
+                    delta=f"₹{round(jc_amount_current, 2)}",
+                    delta_color="off"
+                )
+            
+            col3, col4 = st.columns(2)
+            with col3:
+                st.metric(
+                    label="💵 Manual Cash",
+                    value=manual_count_current,
+                    delta=f"₹{round(manual_amount_current, 2)}",
+                    delta_color="off"
+                )
+            
+            with col4:
+                st.metric(
+                    label="📦 Total",
+                    value=total_count_current,
+                    delta=f"₹{round(total_amount_current, 2)}",
+                    delta_color="off"
+                )
+        
+        with col_right:
+            st.markdown(f"## 📋 Refund Details")
+            st.markdown(f"### {selected_month_label}")
+            
+            tabs = st.tabs(["💳 Cash/UPI", "🏦 Jumbocash", "💵 Manual Cash"])
+            
+            with tabs[0]:
+                if not cash_current_matches.empty:
+                    st.dataframe(
+                        cash_current_matches.reset_index(drop=True),
+                        use_container_width=True,
+                        height=300
+                    )
+                else:
+                    st.info("No Cash/UPI refunds for this month")
+            
+            with tabs[1]:
+                if not jc_current_matches.empty:
+                    st.dataframe(
+                        jc_current_matches.reset_index(drop=True),
+                        use_container_width=True,
+                        height=300
+                    )
+                else:
+                    st.info("No Jumbocash refunds for this month")
+            
+            with tabs[2]:
+                if not manual_current_matches.empty:
+                    st.dataframe(
+                        manual_current_matches.reset_index(drop=True),
+                        use_container_width=True,
+                        height=300
+                    )
+                else:
+                    st.info("No Manual Cash refunds for this month")
+
+        # =====================================================
+        # YEARLY TREND
+        # =====================================================
+        
+        st.markdown("---")
+        st.markdown(f"## 📈 Yearly Refund Trend (Jan - {datetime(current_year, current_month, 1).strftime('%B')})")
+        
+        col1, col2, col3 = st.columns([1, 1, 2])
+        
         with col1:
-            st.metric(
-                label="💳 Cash / UPI",
-                value=cash_count_current,
-                delta=f"₹{round(cash_amount_current, 2)}",
-                delta_color="off"
-            )
+            st.markdown(f"""
+            <div class="trend-card">
+                <p style="margin: 0; opacity: 0.8;">Current Year</p>
+                <h2 style="margin: 5px 0;">{current_year}</h2>
+                <h1 style="margin: 5px 0;">{current_year_count}</h1>
+                <p style="margin: 0; opacity: 0.9;">Jan - {datetime(current_year, current_month, 1).strftime('%b')} Total</p>
+            </div>
+            """, unsafe_allow_html=True)
         
         with col2:
-            st.metric(
-                label="🏦 Jumbocash",
-                value=jc_count_current,
-                delta=f"₹{round(jc_amount_current, 2)}",
-                delta_color="off"
-            )
+            st.markdown(f"""
+            <div class="trend-card-previous">
+                <p style="margin: 0; opacity: 0.8;">Previous Year</p>
+                <h2 style="margin: 5px 0;">{current_year - 1}</h2>
+                <h1 style="margin: 5px 0;">{last_year_count}</h1>
+                <p style="margin: 0; opacity: 0.9;">Jan - {datetime(current_year, current_month, 1).strftime('%b')} Total</p>
+            </div>
+            """, unsafe_allow_html=True)
         
-        col3, col4 = st.columns(2)
         with col3:
-            st.metric(
-                label="💵 Manual Cash",
-                value=manual_count_current,
-                delta=f"₹{round(manual_amount_current, 2)}",
-                delta_color="off"
-            )
-        
-        with col4:
-            st.metric(
-                label="📦 Total",
-                value=total_count_current,
-                delta=f"₹{round(total_amount_current, 2)}",
-                delta_color="off"
-            )
-    
-    with col_right:
-        # ========== RIGHT COLUMN: Refund Details Tabs ==========
-        st.markdown(f"## 📋 Refund Details")
-        st.markdown(f"### {selected_month_label}")
-        
-        tabs = st.tabs(["💳 Cash/UPI", "🏦 Jumbocash", "💵 Manual Cash"])
-        
-        with tabs[0]:
-            if not cash_current_matches.empty:
-                st.dataframe(
-                    cash_current_matches.reset_index(drop=True),
-                    use_container_width=True,
-                    height=300
-                )
+            if last_year_count > 0:
+                change = ((current_year_count - last_year_count) / last_year_count) * 100
+                direction = "📈" if change > 0 else "📉" if change < 0 else "➡️"
+                change_text = f"{direction} {abs(change):.1f}%"
             else:
-                st.info("No Cash/UPI refunds for this month")
-        
-        with tabs[1]:
-            if not jc_current_matches.empty:
-                st.dataframe(
-                    jc_current_matches.reset_index(drop=True),
-                    use_container_width=True,
-                    height=300
-                )
-            else:
-                st.info("No Jumbocash refunds for this month")
-        
-        with tabs[2]:
-            if not manual_current_matches.empty:
-                st.dataframe(
-                    manual_current_matches.reset_index(drop=True),
-                    use_container_width=True,
-                    height=300
-                )
-            else:
-                st.info("No Manual Cash refunds for this month")
+                change_text = "New data" if current_year_count > 0 else "No data"
+            
+            st.markdown(f"""
+            <div style="background-color: #f8f9fa; border-radius: 10px; padding: 20px; height: 100%; display: flex; flex-direction: column; justify-content: center;">
+                <p style="margin: 0; color: #6c757d; font-size: 14px;">Year-over-Year Change<br><small style="color: #999;">(Jan - {datetime(current_year, current_month, 1).strftime('%b')})</small></p>
+                <h2 style="margin: 5px 0; color: {'#28a745' if current_year_count >= last_year_count else '#dc3545'}">{change_text}</h2>
+                <p style="margin: 0; color: #6c757d; font-size: 14px;">
+                    {current_year_count} vs {last_year_count} refunds
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
 
-    # =====================================================
-    # DISPLAY SECTION: Yearly Trend (Full Width)
-    # =====================================================
-    
-    st.markdown("---")
-    st.markdown(f"## 📈 Yearly Refund Trend (Jan - {datetime(current_year, current_month, 1).strftime('%B')})")
-    
-    # Year-over-year comparison (Jan to current month)
-    col1, col2, col3 = st.columns([1, 1, 2])
-    
-    with col1:
-        st.markdown(f"""
-        <div class="trend-card">
-            <p style="margin: 0; opacity: 0.8;">Current Year</p>
-            <h2 style="margin: 5px 0;">{current_year}</h2>
-            <h1 style="margin: 5px 0;">{current_year_count}</h1>
-            <p style="margin: 0; opacity: 0.9;">Jan - {datetime(current_year, current_month, 1).strftime('%b')} Total</p>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col2:
-        st.markdown(f"""
-        <div class="trend-card-previous">
-            <p style="margin: 0; opacity: 0.8;">Previous Year</p>
-            <h2 style="margin: 5px 0;">{current_year - 1}</h2>
-            <h1 style="margin: 5px 0;">{last_year_count}</h1>
-            <p style="margin: 0; opacity: 0.9;">Jan - {datetime(current_year, current_month, 1).strftime('%b')} Total</p>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col3:
-        # Calculate percentage change
-        if last_year_count > 0:
-            change = ((current_year_count - last_year_count) / last_year_count) * 100
-            direction = "📈" if change > 0 else "📉" if change < 0 else "➡️"
-            change_text = f"{direction} {abs(change):.1f}%"
-        else:
-            change_text = "New data" if current_year_count > 0 else "No data"
+        # Monthly breakdown
+        st.markdown("### 📅 Monthly Breakdown")
         
-        st.markdown(f"""
-        <div style="background-color: #f8f9fa; border-radius: 10px; padding: 20px; height: 100%; display: flex; flex-direction: column; justify-content: center;">
-            <p style="margin: 0; color: #6c757d; font-size: 14px;">Year-over-Year Change<br><small style="color: #999;">(Jan - {datetime(current_year, current_month, 1).strftime('%b')})</small></p>
-            <h2 style="margin: 5px 0; color: {'#28a745' if current_year_count >= last_year_count else '#dc3545'}">{change_text}</h2>
-            <p style="margin: 0; color: #6c757d; font-size: 14px;">
-                {current_year_count} vs {last_year_count} refunds
-            </p>
-        </div>
-        """, unsafe_allow_html=True)
+        monthly_data = []
+        for i, month in enumerate(month_names):
+            status = "📍 Current" if i == month_input - 1 else ""
+            if selected_year == current_year and i >= current_month:
+                status = "⏳ Future" if status != "📍 Current" else status
+            monthly_data.append({
+                "Month": month,
+                "Refunds": monthly_counts[i],
+                "Status": status
+            })
+        
+        monthly_df = pd.DataFrame(monthly_data)
+        
+        def highlight_current(row):
+            if row['Status'] == '📍 Current':
+                return ['background-color: #e3f2fd'] * len(row)
+            elif row['Status'] == '⏳ Future':
+                return ['background-color: #f5f5f5; color: #999'] * len(row)
+            return [''] * len(row)
+        
+        st.dataframe(
+            monthly_df.style.apply(highlight_current, axis=1),
+            use_container_width=True,
+            hide_index=True
+        )
 
-    # Monthly breakdown as a clean table
-    st.markdown("### 📅 Monthly Breakdown")
+# ================= TAB 2: High Risk Customers =================
+with tab2:
+    st.markdown("## 🚨 High Risk Customers")
+    st.info("Customers who average 3+ refunds per month or have 3+ refunds every month")
     
-    # Create a clean monthly breakdown table
-    monthly_data = []
-    for i, month in enumerate(month_names):
-        status = "📍 Current" if i == month_input - 1 else ""
-        # Mark months beyond current month as "Future" if it's the current year
-        if selected_year == current_year and i >= current_month:
-            status = "⏳ Future" if status != "📍 Current" else status
-        monthly_data.append({
-            "Month": month,
-            "Refunds": monthly_counts[i],
-            "Status": status
-        })
-    
-    monthly_df = pd.DataFrame(monthly_data)
-    
-    # Highlight current month with color
-    def highlight_current(row):
-        if row['Status'] == '📍 Current':
-            return ['background-color: #e3f2fd'] * len(row)
-        elif row['Status'] == '⏳ Future':
-            return ['background-color: #f5f5f5; color: #999'] * len(row)
-        return [''] * len(row)
-    
-    st.dataframe(
-        monthly_df.style.apply(highlight_current, axis=1),
-        use_container_width=True,
-        hide_index=True
-    )
+    if st.button("🔄 Load High Risk Customers"):
+        with st.spinner("Analyzing customer data..."):
+            # Load all data
+            cash_df = load_sheet(
+                st.secrets["cash_upi_sheet_id"],
+                "Form Responses 1"
+            )
+
+            jc_df = load_sheet(
+                st.secrets["jumbocash_sheet_id"],
+                "Form Responses 1"
+            )
+
+            manual_df = load_sheet(
+                st.secrets["cash_upi_sheet_id"],
+                "cash refund"
+            )
+            
+            # Clean and prepare data
+            cash_df["BZID"] = (
+                cash_df["Business ID"]
+                .astype(str)
+                .str.strip()
+                .str.upper()
+            )
+
+            cash_df["Date"] = pd.to_datetime(
+                cash_df["Date"],
+                errors="coerce"
+            )
+
+            if "Timestamp" in cash_df.columns:
+                cash_df["Date"] = cash_df["Date"].fillna(
+                    pd.to_datetime(
+                        cash_df["Timestamp"],
+                        errors="coerce"
+                    )
+                )
+            
+            jc_df.columns = jc_df.columns.str.strip()
+            jc_df["BZID"] = (
+                jc_df["BZID"]
+                .astype(str)
+                .str.strip()
+                .str.upper()
+            )
+
+            if "date" in jc_df.columns:
+                jc_df["Date"] = pd.to_datetime(
+                    jc_df["date"],
+                    errors="coerce"
+                )
+            elif "Date" in jc_df.columns:
+                jc_df["Date"] = pd.to_datetime(
+                    jc_df["Date"],
+                    errors="coerce"
+                )
+            else:
+                jc_df["Date"] = pd.NaT
+
+            if "Timestamp" in jc_df.columns:
+                jc_df["Date"] = jc_df["Date"].fillna(
+                    pd.to_datetime(
+                        jc_df["Timestamp"],
+                        errors="coerce"
+                    )
+                )
+            
+            manual_df["BZID"] = (
+                manual_df["BZID"]
+                .astype(str)
+                .str.strip()
+                .str.upper()
+            )
+
+            manual_df["Date"] = pd.to_datetime(
+                manual_df["Date"],
+                errors="coerce"
+            )
+
+            if "Timestamp" in manual_df.columns:
+                manual_df["Date"] = manual_df["Date"].fillna(
+                    pd.to_datetime(
+                        manual_df["Timestamp"],
+                        errors="coerce"
+                    )
+                )
+            
+            # Combine all data
+            all_refunds = pd.concat([
+                cash_df[["BZID", "Date"]],
+                jc_df[["BZID", "Date"]],
+                manual_df[["BZID", "Date"]]
+            ], ignore_index=True)
+            
+            # Get all unique BZIDs
+            all_bzids = all_refunds["BZID"].unique()
+            
+            high_risk_customers = []
+            
+            for bzid in all_bzids:
+                # Skip if BZID is empty or NaN
+                if pd.isna(bzid) or bzid == "":
+                    continue
+                    
+                # Get monthly counts for this customer
+                _, monthly_counts = get_monthly_counts(all_refunds, bzid, current_year)
+                
+                # Consider only months up to current month
+                actual_counts = monthly_counts[:current_month]
+                
+                # Skip if no data
+                if sum(actual_counts) == 0:
+                    continue
+                
+                # Calculate average refunds per month
+                months_with_data = len([c for c in actual_counts if c > 0])
+                avg_refunds = sum(actual_counts) / current_month if current_month > 0 else 0
+                
+                # Check if customer has 3+ refunds in every month so far
+                all_months_above_threshold = all(count >= 3 for count in actual_counts) if actual_counts else False
+                
+                # Check if average is 3 or more
+                avg_above_threshold = avg_refunds >= 3
+                
+                # Flag if: average >= 3 OR every month has 3+ refunds
+                if avg_above_threshold or all_months_above_threshold:
+                    # Get total amount refunded - we need to get it from original data with amounts
+                    total_amount = 0
+                    
+                    # Get cash amount
+                    cash_amount = pd.to_numeric(
+                        cash_df[(cash_df["BZID"] == bzid) & 
+                                (cash_df["Date"].dt.year == current_year) &
+                                (cash_df["Date"].dt.month <= current_month)]["Amount"],
+                        errors="coerce"
+                    ).sum()
+                    
+                    # Get jc amount
+                    jc_amount = pd.to_numeric(
+                        jc_df[(jc_df["BZID"] == bzid) & 
+                              (jc_df["Date"].dt.year == current_year) &
+                              (jc_df["Date"].dt.month <= current_month)]["Amount"],
+                        errors="coerce"
+                    ).sum()
+                    
+                    # Get manual amount
+                    manual_amount = pd.to_numeric(
+                        manual_df[(manual_df["BZID"] == bzid) & 
+                                  (manual_df["Date"].dt.year == current_year) &
+                                  (manual_df["Date"].dt.month <= current_month)]["Amount"],
+                        errors="coerce"
+                    ).sum()
+                    
+                    total_amount = cash_amount + jc_amount + manual_amount
+                    
+                    high_risk_customers.append({
+                        "BZID": bzid,
+                        "Total Refunds": sum(actual_counts),
+                        "Monthly Average": round(avg_refunds, 2),
+                        "Months with Data": months_with_data,
+                        "Total Amount (₹)": round(total_amount, 2),
+                        "Monthly Pattern": ", ".join([str(c) for c in actual_counts])
+                    })
+            
+            # Sort by total refunds (highest first)
+            high_risk_df = pd.DataFrame(high_risk_customers)
+            
+            if not high_risk_df.empty:
+                high_risk_df = high_risk_df.sort_values("Total Refunds", ascending=False)
+                
+                st.success(f"Found {len(high_risk_df)} high-risk customers")
+                
+                # Display metrics
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Total High Risk Customers", len(high_risk_df))
+                with col2:
+                    st.metric("Total Refunds (All)", high_risk_df["Total Refunds"].sum())
+                with col3:
+                    st.metric("Total Amount (All)", f"₹{high_risk_df['Total Amount (₹)'].sum():,.2f}")
+                
+                # Display the dataframe with highlighting
+                st.dataframe(
+                    high_risk_df.style.background_gradient(subset=["Total Refunds"], cmap="RdYlGn_r"),
+                    use_container_width=True,
+                    hide_index=True
+                )
+                
+                # Download button
+                csv = high_risk_df.to_csv(index=False)
+                st.download_button(
+                    label="📥 Download High Risk Customers Report",
+                    data=csv,
+                    file_name=f"high_risk_customers_{current_year}.csv",
+                    mime="text/csv"
+                )
+                
+                # Show individual customer breakdown
+                st.markdown("### 📊 Individual Customer Monthly Breakdown")
+                selected_bzid = st.selectbox(
+                    "Select BZID to view details",
+                    high_risk_df["BZID"].tolist()
+                )
+                
+                if selected_bzid:
+                    # Get monthly counts for selected customer
+                    _, monthly_counts = get_monthly_counts(all_refunds, selected_bzid, current_year)
+                    
+                    # Create monthly breakdown for this customer
+                    monthly_data = []
+                    for i, month in enumerate(["Jan", "Feb", "Mar", "Apr", "May", "Jun", 
+                                               "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][:current_month]):
+                        monthly_data.append({
+                            "Month": month,
+                            "Refunds": monthly_counts[i]
+                        })
+                    
+                    monthly_df = pd.DataFrame(monthly_data)
+                    
+                    st.dataframe(
+                        monthly_df.style.bar(subset=["Refunds"], color="#f093fb"),
+                        use_container_width=True,
+                        hide_index=True
+                    )
+            else:
+                st.info("✅ No high-risk customers found! All customers have less than 3 refunds per month on average.")
