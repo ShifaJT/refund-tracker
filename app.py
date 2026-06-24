@@ -74,6 +74,15 @@ st.markdown("""
         border-radius: 5px;
         margin: 10px 0;
     }
+    .debug-box {
+        background-color: #f8f9fa;
+        border: 1px solid #dee2e6;
+        padding: 10px;
+        border-radius: 5px;
+        margin: 10px 0;
+        font-family: monospace;
+        font-size: 12px;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -187,13 +196,15 @@ def get_monthly_counts(df, bzid, year):
 
 # ================= OPTIMIZED: GET HIGH RISK CUSTOMERS =================
 @st.cache_data(ttl=300)
-def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_month):
+def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_month, debug=False):
     """
     Optimized version - Simple criteria: Average refunds >= 3 per month
     Average is calculated over the number of months that have passed (Jan to current_month)
     """
     if current_month is None:
         return pd.DataFrame()
+    
+    debug_info = {}
     
     # Prepare all dataframes with common structure
     def prepare_df(df, df_type):
@@ -276,8 +287,14 @@ def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_m
     jc_prep = prepare_df(jc_df, "jc")
     manual_prep = prepare_df(manual_df, "manual")
     
+    debug_info["cash_rows"] = len(cash_prep)
+    debug_info["jc_rows"] = len(jc_prep)
+    debug_info["manual_rows"] = len(manual_prep)
+    
     # Combine all data
     all_data = pd.concat([cash_prep, jc_prep, manual_prep], ignore_index=True)
+    
+    debug_info["total_rows"] = len(all_data)
     
     if all_data.empty:
         return pd.DataFrame()
@@ -287,6 +304,8 @@ def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_m
         all_data["Date"] = pd.to_datetime(all_data["Date"], errors="coerce")
     
     all_data = all_data[all_data["Date"].notna()]
+    
+    debug_info["valid_dates"] = len(all_data)
     
     if all_data.empty:
         return pd.DataFrame()
@@ -299,6 +318,9 @@ def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_m
         Refund_Count=("Ticket", "nunique"),
         Total_Amount=("Amount", "sum")
     ).reset_index()
+    
+    debug_info["unique_bzids"] = all_data["BZID"].nunique()
+    debug_info["months_with_data"] = monthly_summary["Month"].nunique()
     
     # Pivot to get monthly counts
     monthly_counts_pivot = monthly_summary.pivot(
@@ -340,7 +362,6 @@ def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_m
         
         # Calculate metrics
         total_refunds = sum(monthly_counts)
-        # CRITICAL FIX: Average is calculated over the number of months that have passed (current_month)
         avg_refunds = total_refunds / current_month  # Using current_month, not 12
         months_with_refunds = sum(1 for c in monthly_counts if c > 0)
         max_monthly_refunds = max(monthly_counts) if monthly_counts else 0
@@ -353,7 +374,7 @@ def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_m
         jc_total = jc_prep[jc_prep["BZID"] == bzid]["Amount"].sum() if not jc_prep.empty else 0
         manual_total = manual_prep[manual_prep["BZID"] == bzid]["Amount"].sum() if not manual_prep.empty else 0
         
-        # SIMPLE CRITERIA: Average refunds >= 3 per month (based on months passed)
+        # SIMPLE CRITERIA: Average refunds >= 3 per month
         if avg_refunds >= 3:
             # Create monthly breakdown with counts and amounts
             monthly_breakdown = {}
@@ -377,7 +398,12 @@ def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_m
                 **monthly_breakdown
             })
     
-    return pd.DataFrame(results)
+    debug_info["high_risk_count"] = len(results)
+    
+    if debug:
+        return pd.DataFrame(results), debug_info
+    else:
+        return pd.DataFrame(results)
 
 # ================= REFRESH =================
 if st.button("🔄 Refresh Data"):
@@ -865,22 +891,45 @@ with tab2:
     # Initialize session state
     if 'high_risk_data' not in st.session_state:
         st.session_state.high_risk_data = None
+    if 'debug_info' not in st.session_state:
+        st.session_state.debug_info = None
     
     if st.button("🔄 Load High Risk Customers"):
         # Load all data with caching
         cash_df, jc_df, manual_df = load_all_data()
         
-        # Get high risk customers using optimized function
+        # Get high risk customers using optimized function with debug
         with st.spinner("Analyzing customer data..."):
-            high_risk_df = get_high_risk_customers_optimized(
+            high_risk_df, debug_info = get_high_risk_customers_optimized(
                 cash_df, 
                 jc_df, 
                 manual_df, 
                 current_year, 
-                current_month
+                current_month,
+                debug=True
             )
             
             st.session_state.high_risk_data = high_risk_df
+            st.session_state.debug_info = debug_info
+    
+    # Display debug info if available
+    if st.session_state.debug_info is not None:
+        with st.expander("🔍 Debug Information (Click to expand)"):
+            debug = st.session_state.debug_info
+            st.markdown(f"""
+            <div class="debug-box">
+                <b>Data Loading Summary:</b><br>
+                • Cash/UPI rows loaded: {debug.get('cash_rows', 0)}<br>
+                • Jumbocash rows loaded: {debug.get('jc_rows', 0)}<br>
+                • Manual Cash rows loaded: {debug.get('manual_rows', 0)}<br>
+                • Total rows combined: {debug.get('total_rows', 0)}<br>
+                • Rows with valid dates: {debug.get('valid_dates', 0)}<br>
+                • Unique BZIDs found: {debug.get('unique_bzids', 0)}<br>
+                • Months with data: {debug.get('months_with_data', 0)}<br>
+                • High risk customers found: {debug.get('high_risk_count', 0)}<br>
+                • Current Month: {current_month} (Jan = 1, Dec = 12)
+            </div>
+            """, unsafe_allow_html=True)
     
     # Display high risk data from session state
     if st.session_state.high_risk_data is not None and not st.session_state.high_risk_data.empty:
