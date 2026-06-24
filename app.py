@@ -190,6 +190,7 @@ def get_monthly_counts(df, bzid, year):
 def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_month):
     """
     Optimized version - Simple criteria: Average refunds >= 3 per month
+    Average is calculated over the number of months that have passed (Jan to current_month)
     """
     if current_month is None:
         return pd.DataFrame()
@@ -339,7 +340,8 @@ def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_m
         
         # Calculate metrics
         total_refunds = sum(monthly_counts)
-        avg_refunds = total_refunds / current_month
+        # CRITICAL FIX: Average is calculated over the number of months that have passed (current_month)
+        avg_refunds = total_refunds / current_month  # Using current_month, not 12
         months_with_refunds = sum(1 for c in monthly_counts if c > 0)
         max_monthly_refunds = max(monthly_counts) if monthly_counts else 0
         
@@ -351,7 +353,7 @@ def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_m
         jc_total = jc_prep[jc_prep["BZID"] == bzid]["Amount"].sum() if not jc_prep.empty else 0
         manual_total = manual_prep[manual_prep["BZID"] == bzid]["Amount"].sum() if not manual_prep.empty else 0
         
-        # SIMPLE CRITERIA: Average refunds >= 3 per month
+        # SIMPLE CRITERIA: Average refunds >= 3 per month (based on months passed)
         if avg_refunds >= 3:
             # Create monthly breakdown with counts and amounts
             monthly_breakdown = {}
@@ -829,9 +831,10 @@ with tab2:
     st.markdown("""
     <div class="info-box">
         <b>📖 Criteria:</b><br>
-        • <b>High Risk</b> = Customers with <b>average refunds >= 3 per month</b><br>
+        • <b>High Risk</b> = Customers with <b>average refunds >= 3 per month</b> (calculated from Jan to current month)<br>
+        • <b>Example:</b> If it's June and customer has 18 refunds total → Average = 18/6 = 3.0 ✅ Flagged<br>
         • <b>Total Refunds</b> = Total refunds given to this customer from Jan to current month<br>
-        • <b>Avg/Month</b> = Average refunds per month (Total Refunds ÷ Number of months)<br>
+        • <b>Avg/Month</b> = Average refunds per month (Total Refunds ÷ Months passed)<br>
         • <b>Months Active</b> = Number of months where customer had at least 1 refund<br>
         • <b>Cash/UPI, Jumbocash, Manual Cash</b> = Total amount refunded through each payment method<br>
         • <b>Jan, Feb, Mar...</b> = Refund count [Total amount in ₹] for each specific month
