@@ -74,6 +74,21 @@ st.markdown("""
         border-radius: 5px;
         margin: 10px 0;
     }
+    .risk-extreme {
+        background-color: #dc3545;
+        color: white;
+        font-weight: bold;
+    }
+    .risk-high {
+        background-color: #f8d7da;
+        font-weight: bold;
+    }
+    .risk-medium {
+        background-color: #fff3cd;
+    }
+    .risk-inactive {
+        background-color: #e9ecef;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -225,7 +240,6 @@ def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_m
         
         df["Date"] = pd.to_datetime(df[date_col], errors="coerce")
         
-        # If date conversion failed, try alternative
         if df["Date"].isna().all():
             try:
                 df["Date"] = pd.to_datetime(df[date_col], errors="coerce", infer_datetime_format=True)
@@ -344,19 +358,9 @@ def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_m
         months_with_refunds = sum(1 for c in monthly_counts if c > 0)
         max_monthly_refunds = max(monthly_counts) if monthly_counts else 0
         
-        # NEW: Check if customer has refunds in the last 3 months (active pattern)
+        # Check if active in last 3 months (has refunds in at least 2 of the last 3 months)
         last_3_months = monthly_counts[-3:] if len(monthly_counts) >= 3 else monthly_counts
         active_in_last_3 = sum(1 for c in last_3_months if c > 0) >= 2
-        
-        # NEW: Check if customer has been consistently taking refunds (3+ months in a row)
-        consecutive_months = 0
-        max_consecutive = 0
-        for count in monthly_counts:
-            if count > 0:
-                consecutive_months += 1
-                max_consecutive = max(max_consecutive, consecutive_months)
-            else:
-                consecutive_months = 0
         
         # Check if any month has 5+ refunds (policy breach)
         has_policy_breach = max_monthly_refunds >= 5
@@ -369,18 +373,20 @@ def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_m
         jc_total = jc_prep[jc_prep["BZID"] == bzid]["Amount"].sum() if not jc_prep.empty else 0
         manual_total = manual_prep[manual_prep["BZID"] == bzid]["Amount"].sum() if not manual_prep.empty else 0
         
-        # ===== IMPROVED RISK ASSESSMENT =====
+        # ===== UPDATED RISK ASSESSMENT =====
         is_high_frequency = avg_refunds >= 3
-        is_high_amount = total_amount >= 500
+        is_high_amount = total_amount >= 1000  # High value threshold
+        is_policy_breach = has_policy_breach
+        is_active = active_in_last_3
         
-        # EXTREME: Active pattern (last 3 months) AND (Policy Breach OR High Frequency)
-        if active_in_last_3 and (has_policy_breach or (is_high_frequency and is_high_amount)):
+        # EXTREME: Active AND (Policy Breach OR High Frequency OR High Amount)
+        if is_active and (is_policy_breach or is_high_frequency or is_high_amount):
             risk_level = "🔴🔴 EXTREME"
-        # HIGH: Policy Breach OR (High Frequency + Active pattern) OR (High Amount + Active pattern)
-        elif has_policy_breach or (is_high_frequency and active_in_last_3) or (is_high_amount and active_in_last_3):
+        # HIGH: Policy Breach (even if inactive) OR Active with pattern
+        elif is_policy_breach or (is_active and (is_high_frequency or months_with_refunds >= 3)):
             risk_level = "🔴 HIGH"
-        # MEDIUM: High Frequency but not active recently (stopped) OR High Amount but not active
-        elif is_high_frequency or is_high_amount:
+        # MEDIUM: Historical pattern but inactive
+        elif (is_high_frequency or is_high_amount) and not is_active:
             risk_level = "🟡 MEDIUM"
         else:
             continue
@@ -395,7 +401,7 @@ def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_m
                     monthly_breakdown[month_abbr[i]] = "0"
         
         # Add activity status
-        activity_status = "🔴 Active" if active_in_last_3 else "⏸️ Inactive"
+        activity_status = "🔴 Active" if is_active else "⏸️ Inactive"
         
         results.append({
             "BZID": bzid,
@@ -867,13 +873,14 @@ with tab2:
     st.markdown("""
     <div class="info-box">
         <b>📖 10X Risk Assessment - Updated Criteria:</b><br><br>
-        <b>🔴🔴 EXTREME RISK:</b> Actively taking refunds (last 3 months) AND (Policy Breach OR High Frequency)<br>
-        <b>🔴 HIGH RISK:</b> Policy Breach OR Active pattern with High Frequency/High Amount<br>
+        <b>🔴🔴 EXTREME RISK:</b> Actively taking refunds (last 3 months) AND (Policy Breach OR High Frequency OR High Amount)<br>
+        <b>🔴 HIGH RISK:</b> Policy Breach (even if inactive) OR Active with pattern<br>
         <b>🟡 MEDIUM RISK:</b> Historical pattern (High Frequency or High Amount) but not active recently<br>
         <b>⏸️ Inactive:</b> Customer had refunds but stopped (no refunds in recent months)<br><br>
-        <b>Key Difference:</b> We now focus on <b>ACTIVE</b> patterns, not just historical data.<br>
-        • Customer who took refunds in Jan-Feb only = 🟡 MEDIUM (inactive)<br>
-        • Customer taking refunds consistently now = 🔴🔴 EXTREME (active pattern)
+        <b>Key Difference:</b> We now focus on <b>ACTIVE</b> patterns AND <b>HIGH VALUE</b> customers.<br>
+        • Customer with ₹2,229 refunds actively = 🔴🔴 EXTREME<br>
+        • Customer with ₹3,750 refunds but stopped = 🔴 HIGH<br>
+        • Customer with ₹2,149 refunds actively = 🔴🔴 EXTREME
     </div>
     """, unsafe_allow_html=True)
     
@@ -971,12 +978,11 @@ with tab2:
         for month in month_abbr:
             column_config[month] = st.column_config.TextColumn(month)
         
-        # Display dataframe
+        # Display dataframe with styling
         st.markdown("### 📊 Customer Monthly Refund Breakdown")
         
-        # Style the dataframe
+        # Apply styling
         def highlight_risk(row):
-            styles = ['' for _ in range(len(row))]
             risk = row.get('Risk Level', '')
             status = row.get('Status', '')
             
@@ -988,7 +994,7 @@ with tab2:
                 if 'Inactive' in status:
                     return ['background-color: #e9ecef;'] * len(row)
                 return ['background-color: #fff3cd;'] * len(row)
-            return styles
+            return [''] * len(row)
         
         styled_df = high_risk_df.style.apply(highlight_risk, axis=1)
         
