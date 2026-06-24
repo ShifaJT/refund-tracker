@@ -201,7 +201,7 @@ def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_m
         
         df = df.copy()
         
-        # Find BZID column - handle different column names
+        # Find BZID column
         bzid_col = None
         for col in ["BZID", "Business ID", "BZD", "bzid"]:
             if col in df.columns:
@@ -211,7 +211,6 @@ def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_m
         if bzid_col is None:
             return pd.DataFrame(columns=["BZID", "Date", "Amount", "Ticket"])
         
-        # Convert BZID to string and clean
         df["BZID"] = df[bzid_col].astype(str).str.strip().str.upper()
         
         # Find Date column
@@ -224,25 +223,15 @@ def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_m
         if date_col is None:
             return pd.DataFrame(columns=["BZID", "Date", "Amount", "Ticket"])
         
-        # Convert to datetime - handle multiple formats
         df["Date"] = pd.to_datetime(df[date_col], errors="coerce")
         
-        # If date conversion failed, try parsing as Excel date
-        if df["Date"].isna().all():
-            # Try to parse as Excel serial date
-            try:
-                df["Date"] = pd.to_datetime(df[date_col], errors="coerce", unit='D', origin='1899-12-30')
-            except:
-                pass
-        
-        # If still all NA, try extracting from string
+        # If date conversion failed, try alternative
         if df["Date"].isna().all():
             try:
                 df["Date"] = pd.to_datetime(df[date_col], errors="coerce", infer_datetime_format=True)
             except:
                 pass
         
-        # If we still have no dates, return empty
         if df["Date"].isna().all():
             return pd.DataFrame(columns=["BZID", "Date", "Amount", "Ticket"])
         
@@ -268,7 +257,7 @@ def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_m
         else:
             df["Amount"] = 0
         
-        # Find Ticket column for unique count
+        # Find Ticket column
         ticket_col = None
         for col in ["Ticket Number", "Ticket ID", "Ticket No", "Ticket Number_1", "Ticket ID_1"]:
             if col in df.columns:
@@ -297,7 +286,6 @@ def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_m
     if not pd.api.types.is_datetime64_any_dtype(all_data["Date"]):
         all_data["Date"] = pd.to_datetime(all_data["Date"], errors="coerce")
     
-    # Remove rows with invalid dates
     all_data = all_data[all_data["Date"].notna()]
     
     if all_data.empty:
@@ -306,7 +294,7 @@ def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_m
     # Extract month from date
     all_data["Month"] = all_data["Date"].dt.month
     
-    # Group by BZID and month to get counts and amounts
+    # Group by BZID and month
     monthly_summary = all_data.groupby(["BZID", "Month"]).agg(
         Refund_Count=("Ticket", "nunique"),
         Total_Amount=("Amount", "sum")
@@ -337,7 +325,6 @@ def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_m
     monthly_counts_pivot = monthly_counts_pivot[sorted(monthly_counts_pivot.columns)]
     monthly_amounts_pivot = monthly_amounts_pivot[sorted(monthly_amounts_pivot.columns)]
     
-    # Calculate metrics for all BZIDs at once
     month_abbr = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", 
                   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
     
@@ -356,9 +343,25 @@ def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_m
         avg_refunds = total_refunds / current_month
         months_with_refunds = sum(1 for c in monthly_counts if c > 0)
         max_monthly_refunds = max(monthly_counts) if monthly_counts else 0
+        
+        # NEW: Check if customer has refunds in the last 3 months (active pattern)
+        last_3_months = monthly_counts[-3:] if len(monthly_counts) >= 3 else monthly_counts
+        active_in_last_3 = sum(1 for c in last_3_months if c > 0) >= 2
+        
+        # NEW: Check if customer has been consistently taking refunds (3+ months in a row)
+        consecutive_months = 0
+        max_consecutive = 0
+        for count in monthly_counts:
+            if count > 0:
+                consecutive_months += 1
+                max_consecutive = max(max_consecutive, consecutive_months)
+            else:
+                consecutive_months = 0
+        
+        # Check if any month has 5+ refunds (policy breach)
         has_policy_breach = max_monthly_refunds >= 5
         
-        # Get total amount across all months
+        # Get total amount
         total_amount = sum(monthly_amounts)
         
         # Get payment type breakdown
@@ -366,22 +369,23 @@ def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_m
         jc_total = jc_prep[jc_prep["BZID"] == bzid]["Amount"].sum() if not jc_prep.empty else 0
         manual_total = manual_prep[manual_prep["BZID"] == bzid]["Amount"].sum() if not manual_prep.empty else 0
         
-        # Risk assessment
+        # ===== IMPROVED RISK ASSESSMENT =====
         is_high_frequency = avg_refunds >= 3
         is_high_amount = total_amount >= 500
-        is_policy_breach = has_policy_breach
         
-        # Determine risk level
-        if is_policy_breach and is_high_amount:
+        # EXTREME: Active pattern (last 3 months) AND (Policy Breach OR High Frequency)
+        if active_in_last_3 and (has_policy_breach or (is_high_frequency and is_high_amount)):
             risk_level = "🔴🔴 EXTREME"
-        elif is_policy_breach or (is_high_frequency and is_high_amount):
+        # HIGH: Policy Breach OR (High Frequency + Active pattern) OR (High Amount + Active pattern)
+        elif has_policy_breach or (is_high_frequency and active_in_last_3) or (is_high_amount and active_in_last_3):
             risk_level = "🔴 HIGH"
-        elif is_high_frequency:
+        # MEDIUM: High Frequency but not active recently (stopped) OR High Amount but not active
+        elif is_high_frequency or is_high_amount:
             risk_level = "🟡 MEDIUM"
         else:
-            continue  # Skip non-risk customers
+            continue
         
-        # Create monthly breakdown with counts and amounts
+        # Create monthly breakdown
         monthly_breakdown = {}
         for i, (count, amount) in enumerate(zip(monthly_counts, monthly_amounts)):
             if i < current_month:
@@ -390,9 +394,13 @@ def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_m
                 else:
                     monthly_breakdown[month_abbr[i]] = "0"
         
+        # Add activity status
+        activity_status = "🔴 Active" if active_in_last_3 else "⏸️ Inactive"
+        
         results.append({
             "BZID": bzid,
             "Risk Level": risk_level,
+            "Status": activity_status,
             "Total Refunds": total_refunds,
             "Monthly Average": round(avg_refunds, 2),
             "Months Active": months_with_refunds,
@@ -855,16 +863,17 @@ with tab1:
 with tab2:
     st.markdown("## 🚨 High Risk Customers - 10X Approach")
     
-    # Add explanation box
+    # Add explanation box with updated criteria
     st.markdown("""
     <div class="info-box">
-        <b>📖 10X Risk Assessment - Multiple Criteria:</b><br><br>
-        <b>🔴🔴 EXTREME RISK:</b> Policy Breach (5+ refunds in any month) AND High Amount (₹500+)<br>
-        <b>🔴 HIGH RISK:</b> Policy Breach OR (High Frequency + High Amount)<br>
-        <b>🟡 MEDIUM RISK:</b> High Frequency (3+ avg refunds per month)<br><br>
-        <b>Why this approach?</b> We catch BOTH types of risky customers:<br>
-        • <b>High Frequency, Low Amount</b> - Customer taking 6 refunds of ₹50 (Policy breach)<br>
-        • <b>High Frequency, High Amount</b> - Customer taking 5 refunds of ₹1000 (Policy breach + High impact)
+        <b>📖 10X Risk Assessment - Updated Criteria:</b><br><br>
+        <b>🔴🔴 EXTREME RISK:</b> Actively taking refunds (last 3 months) AND (Policy Breach OR High Frequency)<br>
+        <b>🔴 HIGH RISK:</b> Policy Breach OR Active pattern with High Frequency/High Amount<br>
+        <b>🟡 MEDIUM RISK:</b> Historical pattern (High Frequency or High Amount) but not active recently<br>
+        <b>⏸️ Inactive:</b> Customer had refunds but stopped (no refunds in recent months)<br><br>
+        <b>Key Difference:</b> We now focus on <b>ACTIVE</b> patterns, not just historical data.<br>
+        • Customer who took refunds in Jan-Feb only = 🟡 MEDIUM (inactive)<br>
+        • Customer taking refunds consistently now = 🔴🔴 EXTREME (active pattern)
     </div>
     """, unsafe_allow_html=True)
     
@@ -913,7 +922,7 @@ with tab2:
     if st.session_state.high_risk_data is not None and not st.session_state.high_risk_data.empty:
         high_risk_df = st.session_state.high_risk_data
         
-        # Sort by risk level
+        # Sort by risk level (EXTREME first, then HIGH, then MEDIUM)
         risk_order = {"🔴🔴 EXTREME": 0, "🔴 HIGH": 1, "🟡 MEDIUM": 2}
         high_risk_df["Risk_Order"] = high_risk_df["Risk Level"].map(risk_order)
         high_risk_df = high_risk_df.sort_values(["Risk_Order", "Total Refunds"], ascending=[True, False])
@@ -922,7 +931,7 @@ with tab2:
         st.success(f"Found {len(high_risk_df)} high-risk customers")
         
         # Display metrics
-        col1, col2, col3, col4, col5 = st.columns(5)
+        col1, col2, col3, col4, col5, col6 = st.columns(6)
         with col1:
             st.metric("Total High Risk", len(high_risk_df))
         with col2:
@@ -932,8 +941,11 @@ with tab2:
             high_count = len(high_risk_df[high_risk_df["Risk Level"] == "🔴 HIGH"])
             st.metric("🔴 High Risk", high_count)
         with col4:
-            st.metric("Total Refunds", int(high_risk_df["Total Refunds"].sum()))
+            medium_count = len(high_risk_df[high_risk_df["Risk Level"] == "🟡 MEDIUM"])
+            st.metric("🟡 Medium", medium_count)
         with col5:
+            st.metric("Total Refunds", int(high_risk_df["Total Refunds"].sum()))
+        with col6:
             st.metric("Total Amount", f"₹{high_risk_df['Total_Amount'].sum():,.2f}")
         
         # Get month columns
@@ -944,6 +956,7 @@ with tab2:
         column_config = {
             "BZID": st.column_config.TextColumn("BZID"),
             "Risk Level": st.column_config.TextColumn("Risk Level"),
+            "Status": st.column_config.TextColumn("Status", help="Active (last 3 months) or Inactive"),
             "Total Refunds": st.column_config.NumberColumn("Total Refunds", format="%d"),
             "Monthly Average": st.column_config.NumberColumn("Avg/Month", format="%.2f"),
             "Months Active": st.column_config.NumberColumn("Months Active", format="%d"),
@@ -965,11 +978,15 @@ with tab2:
         def highlight_risk(row):
             styles = ['' for _ in range(len(row))]
             risk = row.get('Risk Level', '')
+            status = row.get('Status', '')
+            
             if 'EXTREME' in risk:
                 return ['background-color: #dc3545; color: white; font-weight: bold;'] * len(row)
             elif 'HIGH' in risk:
                 return ['background-color: #f8d7da; font-weight: bold;'] * len(row)
             elif 'MEDIUM' in risk:
+                if 'Inactive' in status:
+                    return ['background-color: #e9ecef;'] * len(row)
                 return ['background-color: #fff3cd;'] * len(row)
             return styles
         
