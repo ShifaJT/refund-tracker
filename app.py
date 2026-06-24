@@ -189,7 +189,7 @@ def get_monthly_counts(df, bzid, year):
 @st.cache_data(ttl=300)
 def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_month):
     """
-    ULTRA-OPTIMIZED version using vectorized operations only
+    Optimized version - Simple criteria: Average refunds >= 3 per month
     """
     if current_month is None:
         return pd.DataFrame()
@@ -225,7 +225,6 @@ def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_m
         
         df["Date"] = pd.to_datetime(df[date_col], errors="coerce")
         
-        # If date conversion failed, try alternative
         if df["Date"].isna().all():
             try:
                 df["Date"] = pd.to_datetime(df[date_col], errors="coerce", infer_datetime_format=True)
@@ -344,23 +343,6 @@ def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_m
         months_with_refunds = sum(1 for c in monthly_counts if c > 0)
         max_monthly_refunds = max(monthly_counts) if monthly_counts else 0
         
-        # NEW: Check if customer has refunds in the last 3 months (active pattern)
-        last_3_months = monthly_counts[-3:] if len(monthly_counts) >= 3 else monthly_counts
-        active_in_last_3 = sum(1 for c in last_3_months if c > 0) >= 2
-        
-        # NEW: Check if customer has been consistently taking refunds (3+ months in a row)
-        consecutive_months = 0
-        max_consecutive = 0
-        for count in monthly_counts:
-            if count > 0:
-                consecutive_months += 1
-                max_consecutive = max(max_consecutive, consecutive_months)
-            else:
-                consecutive_months = 0
-        
-        # Check if any month has 5+ refunds (policy breach)
-        has_policy_breach = max_monthly_refunds >= 5
-        
         # Get total amount
         total_amount = sum(monthly_amounts)
         
@@ -369,49 +351,29 @@ def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_m
         jc_total = jc_prep[jc_prep["BZID"] == bzid]["Amount"].sum() if not jc_prep.empty else 0
         manual_total = manual_prep[manual_prep["BZID"] == bzid]["Amount"].sum() if not manual_prep.empty else 0
         
-        # ===== IMPROVED RISK ASSESSMENT =====
-        is_high_frequency = avg_refunds >= 3
-        is_high_amount = total_amount >= 500
-        
-        # EXTREME: Active pattern (last 3 months) AND (Policy Breach OR High Frequency)
-        if active_in_last_3 and (has_policy_breach or (is_high_frequency and is_high_amount)):
-            risk_level = "🔴🔴 EXTREME"
-        # HIGH: Policy Breach OR (High Frequency + Active pattern) OR (High Amount + Active pattern)
-        elif has_policy_breach or (is_high_frequency and active_in_last_3) or (is_high_amount and active_in_last_3):
-            risk_level = "🔴 HIGH"
-        # MEDIUM: High Frequency but not active recently (stopped) OR High Amount but not active
-        elif is_high_frequency or is_high_amount:
-            risk_level = "🟡 MEDIUM"
-        else:
-            continue
-        
-        # Create monthly breakdown
-        monthly_breakdown = {}
-        for i, (count, amount) in enumerate(zip(monthly_counts, monthly_amounts)):
-            if i < current_month:
-                if count > 0:
-                    monthly_breakdown[month_abbr[i]] = f"{int(count)} [₹{amount:.0f}]"
-                else:
-                    monthly_breakdown[month_abbr[i]] = "0"
-        
-        # Add activity status
-        activity_status = "🔴 Active" if active_in_last_3 else "⏸️ Inactive"
-        
-        results.append({
-            "BZID": bzid,
-            "Risk Level": risk_level,
-            "Status": activity_status,
-            "Total Refunds": total_refunds,
-            "Monthly Average": round(avg_refunds, 2),
-            "Months Active": months_with_refunds,
-            "Max Monthly Refunds": max_monthly_refunds,
-            "Policy Breach": "Yes" if has_policy_breach else "No",
-            "Cash_UPI": round(cash_total, 2),
-            "Jumbocash": round(jc_total, 2),
-            "Manual_Cash": round(manual_total, 2),
-            "Total_Amount": round(total_amount, 2),
-            **monthly_breakdown
-        })
+        # SIMPLE CRITERIA: Average refunds >= 3 per month
+        if avg_refunds >= 3:
+            # Create monthly breakdown with counts and amounts
+            monthly_breakdown = {}
+            for i, (count, amount) in enumerate(zip(monthly_counts, monthly_amounts)):
+                if i < current_month:
+                    if count > 0:
+                        monthly_breakdown[month_abbr[i]] = f"{int(count)} [₹{amount:.0f}]"
+                    else:
+                        monthly_breakdown[month_abbr[i]] = "0"
+            
+            results.append({
+                "BZID": bzid,
+                "Total Refunds": total_refunds,
+                "Monthly Average": round(avg_refunds, 2),
+                "Months Active": months_with_refunds,
+                "Max Monthly Refunds": max_monthly_refunds,
+                "Cash_UPI": round(cash_total, 2),
+                "Jumbocash": round(jc_total, 2),
+                "Manual_Cash": round(manual_total, 2),
+                "Total_Amount": round(total_amount, 2),
+                **monthly_breakdown
+            })
     
     return pd.DataFrame(results)
 
@@ -861,19 +823,18 @@ with tab1:
 
 # ================= TAB 2: High Risk Customers =================
 with tab2:
-    st.markdown("## 🚨 High Risk Customers - 10X Approach")
+    st.markdown("## 🚨 High Risk Customers")
     
-    # Add explanation box with updated criteria
+    # Add explanation box
     st.markdown("""
     <div class="info-box">
-        <b>📖 10X Risk Assessment - Updated Criteria:</b><br><br>
-        <b>🔴🔴 EXTREME RISK:</b> Actively taking refunds (last 3 months) AND (Policy Breach OR High Frequency)<br>
-        <b>🔴 HIGH RISK:</b> Policy Breach OR Active pattern with High Frequency/High Amount<br>
-        <b>🟡 MEDIUM RISK:</b> Historical pattern (High Frequency or High Amount) but not active recently<br>
-        <b>⏸️ Inactive:</b> Customer had refunds but stopped (no refunds in recent months)<br><br>
-        <b>Key Difference:</b> We now focus on <b>ACTIVE</b> patterns, not just historical data.<br>
-        • Customer who took refunds in Jan-Feb only = 🟡 MEDIUM (inactive)<br>
-        • Customer taking refunds consistently now = 🔴🔴 EXTREME (active pattern)
+        <b>📖 Criteria:</b><br>
+        • <b>High Risk</b> = Customers with <b>average refunds >= 3 per month</b><br>
+        • <b>Total Refunds</b> = Total refunds given to this customer from Jan to current month<br>
+        • <b>Avg/Month</b> = Average refunds per month (Total Refunds ÷ Number of months)<br>
+        • <b>Months Active</b> = Number of months where customer had at least 1 refund<br>
+        • <b>Cash/UPI, Jumbocash, Manual Cash</b> = Total amount refunded through each payment method<br>
+        • <b>Jan, Feb, Mar...</b> = Refund count [Total amount in ₹] for each specific month
     </div>
     """, unsafe_allow_html=True)
     
@@ -922,31 +883,21 @@ with tab2:
     if st.session_state.high_risk_data is not None and not st.session_state.high_risk_data.empty:
         high_risk_df = st.session_state.high_risk_data
         
-        # Sort by risk level (EXTREME first, then HIGH, then MEDIUM)
-        risk_order = {"🔴🔴 EXTREME": 0, "🔴 HIGH": 1, "🟡 MEDIUM": 2}
-        high_risk_df["Risk_Order"] = high_risk_df["Risk Level"].map(risk_order)
-        high_risk_df = high_risk_df.sort_values(["Risk_Order", "Total Refunds"], ascending=[True, False])
-        high_risk_df = high_risk_df.drop(columns=["Risk_Order"])
+        # Sort by Total Refunds (highest first)
+        high_risk_df = high_risk_df.sort_values("Total Refunds", ascending=False)
         
         st.success(f"Found {len(high_risk_df)} high-risk customers")
         
         # Display metrics
-        col1, col2, col3, col4, col5, col6 = st.columns(6)
+        col1, col2, col3, col4 = st.columns(4)
         with col1:
-            st.metric("Total High Risk", len(high_risk_df))
+            st.metric("Total High Risk Customers", len(high_risk_df))
         with col2:
-            extreme_count = len(high_risk_df[high_risk_df["Risk Level"] == "🔴🔴 EXTREME"])
-            st.metric("🔴🔴 Extreme", extreme_count)
+            st.metric("Total Refunds (All)", int(high_risk_df["Total Refunds"].sum()))
         with col3:
-            high_count = len(high_risk_df[high_risk_df["Risk Level"] == "🔴 HIGH"])
-            st.metric("🔴 High Risk", high_count)
+            st.metric("Total Cash/UPI", f"₹{high_risk_df['Cash_UPI'].sum():,.2f}")
         with col4:
-            medium_count = len(high_risk_df[high_risk_df["Risk Level"] == "🟡 MEDIUM"])
-            st.metric("🟡 Medium", medium_count)
-        with col5:
-            st.metric("Total Refunds", int(high_risk_df["Total Refunds"].sum()))
-        with col6:
-            st.metric("Total Amount", f"₹{high_risk_df['Total_Amount'].sum():,.2f}")
+            st.metric("Total Jumbocash", f"₹{high_risk_df['Jumbocash'].sum():,.2f}")
         
         # Get month columns
         month_abbr = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", 
@@ -955,13 +906,10 @@ with tab2:
         # Column config
         column_config = {
             "BZID": st.column_config.TextColumn("BZID"),
-            "Risk Level": st.column_config.TextColumn("Risk Level"),
-            "Status": st.column_config.TextColumn("Status", help="Active (last 3 months) or Inactive"),
             "Total Refunds": st.column_config.NumberColumn("Total Refunds", format="%d"),
             "Monthly Average": st.column_config.NumberColumn("Avg/Month", format="%.2f"),
             "Months Active": st.column_config.NumberColumn("Months Active", format="%d"),
             "Max Monthly Refunds": st.column_config.NumberColumn("Max/Month", format="%d"),
-            "Policy Breach": st.column_config.TextColumn("Policy Breach"),
             "Cash_UPI": st.column_config.NumberColumn("Cash/UPI (₹)", format="₹%.2f"),
             "Jumbocash": st.column_config.NumberColumn("Jumbocash (₹)", format="₹%.2f"),
             "Manual_Cash": st.column_config.NumberColumn("Manual Cash (₹)", format="₹%.2f"),
@@ -969,31 +917,17 @@ with tab2:
         }
         
         for month in month_abbr:
-            column_config[month] = st.column_config.TextColumn(month)
+            column_config[month] = st.column_config.TextColumn(
+                month, 
+                help=f"Refunds [Amount] in {month}"
+            )
         
         # Display dataframe
         st.markdown("### 📊 Customer Monthly Refund Breakdown")
-        
-        # Style the dataframe
-        def highlight_risk(row):
-            styles = ['' for _ in range(len(row))]
-            risk = row.get('Risk Level', '')
-            status = row.get('Status', '')
-            
-            if 'EXTREME' in risk:
-                return ['background-color: #dc3545; color: white; font-weight: bold;'] * len(row)
-            elif 'HIGH' in risk:
-                return ['background-color: #f8d7da; font-weight: bold;'] * len(row)
-            elif 'MEDIUM' in risk:
-                if 'Inactive' in status:
-                    return ['background-color: #e9ecef;'] * len(row)
-                return ['background-color: #fff3cd;'] * len(row)
-            return styles
-        
-        styled_df = high_risk_df.style.apply(highlight_risk, axis=1)
+        st.markdown("*Each column shows: Refund Count [Total Amount in ₹] for each month.*")
         
         st.dataframe(
-            styled_df,
+            high_risk_df,
             use_container_width=True,
             hide_index=True,
             column_config=column_config
@@ -1009,7 +943,7 @@ with tab2:
         )
         
     elif st.session_state.high_risk_data is not None and st.session_state.high_risk_data.empty:
-        st.info("✅ No high-risk customers found!")
+        st.info("✅ No high-risk customers found! All customers have average refunds less than 3 per month.")
 
 # ================= FOOTER =================
 st.markdown("---")
