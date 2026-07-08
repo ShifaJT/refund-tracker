@@ -375,7 +375,7 @@ def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_m
         
         # ===== UPDATED RISK ASSESSMENT =====
         is_high_frequency = avg_refunds >= 3
-        is_high_amount = total_amount >= 1000  # High value threshold
+        is_high_amount = total_amount >= 500  # LOWERED from 1000 to 500 to catch more customers
         is_policy_breach = has_policy_breach
         is_active = active_in_last_3
         
@@ -878,9 +878,9 @@ with tab2:
         <b>🟡 MEDIUM RISK:</b> Historical pattern (High Frequency or High Amount) but not active recently<br>
         <b>⏸️ Inactive:</b> Customer had refunds but stopped (no refunds in recent months)<br><br>
         <b>Key Difference:</b> We now focus on <b>ACTIVE</b> patterns AND <b>HIGH VALUE</b> customers.<br>
+        • Customer with ₹990 refunds actively = 🔴🔴 EXTREME (High Frequency)<br>
         • Customer with ₹2,229 refunds actively = 🔴🔴 EXTREME<br>
-        • Customer with ₹3,750 refunds but stopped = 🔴 HIGH<br>
-        • Customer with ₹2,149 refunds actively = 🔴🔴 EXTREME
+        • Customer with ₹3,750 refunds but stopped = 🔴 HIGH
     </div>
     """, unsafe_allow_html=True)
     
