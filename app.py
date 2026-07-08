@@ -197,163 +197,6 @@ def get_monthly_counts(df, bzid, year):
         month_names.append(datetime(year, month, 1).strftime("%B"))
     return month_names, monthly_counts
 
-# ================= GET PRODUCT AND CITY ANALYSIS =================
-@st.cache_data(ttl=300)
-def get_product_city_analysis(cash_df, jc_df, manual_df, year, current_month, selected_month=None):
-    """Analyze product and city trends for refunds using actual Product Names"""
-    
-    def prepare_analysis_df(df):
-        if df.empty:
-            return pd.DataFrame(columns=["BZID", "Date", "Amount", "Product", "City"])
-        
-        df = df.copy()
-        
-        # Find BZID column
-        bzid_col = None
-        for col in ["BZID", "Business ID", "BZD", "bzid"]:
-            if col in df.columns:
-                bzid_col = col
-                break
-        
-        if bzid_col is None:
-            return pd.DataFrame(columns=["BZID", "Date", "Amount", "Product", "City"])
-        
-        df["BZID"] = df[bzid_col].astype(str).str.strip().str.upper()
-        
-        # Find Date column
-        date_col = None
-        for col in ["Date", "date", "Timestamp", "timestamp"]:
-            if col in df.columns:
-                date_col = col
-                break
-        
-        if date_col is None:
-            return pd.DataFrame(columns=["BZID", "Date", "Amount", "Product", "City"])
-        
-        # Convert to datetime - FIXED
-        df["Date"] = pd.to_datetime(df[date_col], errors="coerce")
-        
-        # If date conversion failed, try alternative
-        if df["Date"].isna().all():
-            try:
-                df["Date"] = pd.to_datetime(df[date_col], errors="coerce", infer_datetime_format=True)
-            except:
-                pass
-        
-        # Drop rows with invalid dates
-        df = df[df["Date"].notna()]
-        
-        if df.empty:
-            return pd.DataFrame(columns=["BZID", "Date", "Amount", "Product", "City"])
-        
-        # Filter to current year
-        df = df[df["Date"].dt.year == year]
-        
-        # If a specific month is selected, filter by that month
-        if selected_month is not None:
-            df = df[df["Date"].dt.month == selected_month]
-        
-        if df.empty:
-            return pd.DataFrame(columns=["BZID", "Date", "Amount", "Product", "City"])
-        
-        # Find Amount column
-        amount_col = None
-        for col in ["Amount", "amount", "Refund Amount"]:
-            if col in df.columns:
-                amount_col = col
-                break
-        
-        if amount_col:
-            df["Amount"] = pd.to_numeric(df[amount_col], errors="coerce").fillna(0)
-        else:
-            df["Amount"] = 0
-        
-        # Find Product Name column - prioritize actual product names
-        product_col = None
-        for col in ["Product Name", "Product", "Product name", "product_name", "Item Name", "item_name"]:
-            if col in df.columns:
-                product_col = col
-                break
-        
-        if product_col:
-            df["Product"] = df[product_col].astype(str)
-        else:
-            for col in ["Order Item ID", "Order Item Id", "Order item ID", "DH NAME", "DH Name"]:
-                if col in df.columns:
-                    df["Product"] = df[col].astype(str)
-                    break
-            else:
-                df["Product"] = "Unknown Product"
-        
-        # Find City column
-        city_col = None
-        for col in ["City", "city", "Hub", "hub", "City Name", "CityName"]:
-            if col in df.columns:
-                city_col = col
-                break
-        
-        if city_col:
-            df["City"] = df[city_col].astype(str)
-        else:
-            df["City"] = "Unknown City"
-        
-        return df[["BZID", "Date", "Amount", "Product", "City"]]
-    
-    # Prepare all dataframes
-    cash_analysis = prepare_analysis_df(cash_df)
-    jc_analysis = prepare_analysis_df(jc_df)
-    manual_analysis = prepare_analysis_df(manual_df)
-    
-    # Combine all data
-    all_analysis = pd.concat([cash_analysis, jc_analysis, manual_analysis], ignore_index=True)
-    
-    if all_analysis.empty:
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
-    
-    # Clean product names
-    all_analysis["Product"] = all_analysis["Product"].str.replace("BLTORDITM-", "", regex=False)
-    all_analysis["Product"] = all_analysis["Product"].str.replace("_", " ", regex=False)
-    all_analysis["Product"] = all_analysis["Product"].str.strip()
-    
-    # Add month name - FIXED: Ensure Date is datetime first
-    if not pd.api.types.is_datetime64_any_dtype(all_analysis["Date"]):
-        all_analysis["Date"] = pd.to_datetime(all_analysis["Date"], errors="coerce")
-    
-    all_analysis["Month"] = all_analysis["Date"].dt.strftime("%B")
-    
-    # Top products by refund amount
-    top_products = all_analysis.groupby("Product").agg(
-        Total_Amount=("Amount", "sum"),
-        Refund_Count=("BZID", "count"),
-        Unique_Customers=("BZID", "nunique")
-    ).reset_index().sort_values("Total_Amount", ascending=False).head(10)
-    
-    # Top cities by refund amount
-    top_cities = all_analysis.groupby("City").agg(
-        Total_Amount=("Amount", "sum"),
-        Refund_Count=("BZID", "count"),
-        Unique_Customers=("BZID", "nunique")
-    ).reset_index().sort_values("Total_Amount", ascending=False).head(10)
-    
-    # Monthly product breakdown
-    monthly_products = all_analysis.groupby(["Month", "Product"]).agg(
-        Total_Amount=("Amount", "sum"),
-        Refund_Count=("BZID", "count")
-    ).reset_index().sort_values(["Month", "Total_Amount"], ascending=[True, False])
-    
-    # Identify repeated product issues (products that appear in multiple months)
-    product_months = all_analysis.groupby("Product").agg(
-        Months=("Month", lambda x: list(x.unique())),
-        Month_Count=("Month", "nunique"),
-        Total_Amount=("Amount", "sum"),
-        Total_Refunds=("BZID", "count")
-    ).reset_index()
-    
-    repeated_products = product_months[product_months["Month_Count"] >= 2].sort_values("Month_Count", ascending=False)
-    repeated_products["Months"] = repeated_products["Months"].apply(lambda x: ", ".join(x))
-    
-    return top_products, top_cities, monthly_products, repeated_products
-
 # ================= OPTIMIZED: GET HIGH RISK CUSTOMERS =================
 @st.cache_data(ttl=300)
 def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_month):
@@ -524,7 +367,7 @@ def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_m
         jc_total = jc_prep[jc_prep["BZID"] == bzid]["Amount"].sum() if not jc_prep.empty else 0
         manual_total = manual_prep[manual_prep["BZID"] == bzid]["Amount"].sum() if not manual_prep.empty else 0
         
-        # ===== DEFUALTER DETECTION =====
+        # ===== DEFAULTER DETECTION =====
         # Check if customer has 4+ refunds in every month (consistent defaulter)
         consistent_defaulter = all(count >= 4 for count in monthly_counts[:current_month])
         
@@ -535,11 +378,11 @@ def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_m
         frequent_user = months_with_refunds >= 4
         
         # ===== UPDATED RISK ASSESSMENT =====
-        # 1. EXTREME: (Amount > 500 AND Avg >= 3) OR Consistent Defaulter (4+ every month)
-        if (total_amount > 500 and avg_refunds >= 3) or consistent_defaulter:
+        # 1. EXTREME: (Amount > 500 AND Avg >= 3) OR Consistent Defaulter (4+ every month) OR Policy Breach
+        if (total_amount > 500 and avg_refunds >= 3) or consistent_defaulter or has_policy_breach:
             risk_level = "🔴🔴 EXTREME"
-        # 2. HIGH: Amount <= 500 AND Avg >= 3 OR Policy Breach (5+ in a month)
-        elif (total_amount <= 500 and avg_refunds >= 3) or has_policy_breach:
+        # 2. HIGH: Amount <= 500 AND Avg >= 3
+        elif total_amount <= 500 and avg_refunds >= 3:
             risk_level = "🔴 HIGH"
         # 3. POTENTIAL: Avg >= 2 OR Active in 3+ months OR Frequent user (4+ months)
         elif avg_refunds >= 2 or months_with_refunds >= 3 or frequent_user:
@@ -582,7 +425,7 @@ if st.button("🔄 Refresh Data"):
     st.rerun()
 
 # ================= TAB SELECTION =================
-tab1, tab2, tab3 = st.tabs(["🔍 Individual Search", "📊 High Risk Customers", "📈 Product & City Analysis"])
+tab1, tab2 = st.tabs(["🔍 Individual Search", "📊 High Risk Customers"])
 
 # ================= TAB 1: Individual Search =================
 with tab1:
@@ -1165,141 +1008,6 @@ with tab2:
         
     elif st.session_state.high_risk_data is not None and st.session_state.high_risk_data.empty:
         st.info("✅ No high-risk customers found!")
-
-# ================= TAB 3: Product & City Analysis =================
-with tab3:
-    st.markdown("## 📦 Product & City Refund Analysis")
-    st.markdown("*Identify which products and cities are driving the highest refunds*")
-    
-    # Month filter
-    month_filter = st.selectbox(
-        "Select Month (Optional - All Months shows full year)",
-        ["All Months"] + [datetime(current_year, i, 1).strftime("%B") for i in range(1, current_month + 1)]
-    )
-    
-    # Get selected month number
-    selected_month_num = None
-    if month_filter != "All Months":
-        month_names = [datetime(current_year, i, 1).strftime("%B") for i in range(1, 13)]
-        selected_month_num = month_names.index(month_filter) + 1
-    
-    # Load data
-    @st.cache_data(ttl=300)
-    def load_analysis_data():
-        with st.spinner("Loading data..."):
-            cash_df = load_sheet(
-                st.secrets["cash_upi_sheet_id"],
-                "Form Responses 1"
-            )
-            
-            jc_df = load_sheet(
-                st.secrets["jumbocash_sheet_id"],
-                "Form Responses 1"
-            )
-            
-            manual_df = load_sheet(
-                st.secrets["cash_upi_sheet_id"],
-                "cash refund"
-            )
-            
-            return cash_df, jc_df, manual_df
-    
-    if st.button("🔄 Load Analysis"):
-        cash_df, jc_df, manual_df = load_analysis_data()
-        
-        with st.spinner("Analyzing product and city trends..."):
-            top_products, top_cities, monthly_products, repeated_products = get_product_city_analysis(
-                cash_df, jc_df, manual_df, current_year, current_month, selected_month_num
-            )
-            
-            st.session_state.top_products = top_products
-            st.session_state.top_cities = top_cities
-            st.session_state.monthly_products = monthly_products
-            st.session_state.repeated_products = repeated_products
-            st.session_state.selected_month = month_filter
-    
-    # Display analysis
-    if 'top_products' in st.session_state:
-        
-        # Show current filter
-        st.info(f"📅 Viewing data for: **{st.session_state.selected_month}**")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.markdown("### 🏆 Top Products by Refund Amount")
-            if not st.session_state.top_products.empty:
-                st.dataframe(
-                    st.session_state.top_products,
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config={
-                        "Product": st.column_config.TextColumn("Product Name"),
-                        "Total_Amount": st.column_config.NumberColumn("Total Amount (₹)", format="₹%.2f"),
-                        "Refund_Count": st.column_config.NumberColumn("Refund Count", format="%d"),
-                        "Unique_Customers": st.column_config.NumberColumn("Unique Customers", format="%d")
-                    }
-                )
-            else:
-                st.info("No product data for selected month")
-        
-        with col2:
-            st.markdown("### 🏙️ Top Cities by Refund Amount")
-            if not st.session_state.top_cities.empty:
-                st.dataframe(
-                    st.session_state.top_cities,
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config={
-                        "City": st.column_config.TextColumn("City"),
-                        "Total_Amount": st.column_config.NumberColumn("Total Amount (₹)", format="₹%.2f"),
-                        "Refund_Count": st.column_config.NumberColumn("Refund Count", format="%d"),
-                        "Unique_Customers": st.column_config.NumberColumn("Unique Customers", format="%d")
-                    }
-                )
-            else:
-                st.info("No city data for selected month")
-        
-        # Repeated Product Issues
-        st.markdown("---")
-        st.markdown("### 🔄 Repeated Product Issues (Products with refunds in multiple months)")
-        
-        if 'repeated_products' in st.session_state and not st.session_state.repeated_products.empty:
-            st.markdown("*Products that appear in multiple months - indicating recurring refund issues*")
-            
-            st.dataframe(
-                st.session_state.repeated_products,
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "Product": st.column_config.TextColumn("Product Name"),
-                    "Months": st.column_config.TextColumn("Months with Refunds"),
-                    "Month_Count": st.column_config.NumberColumn("Number of Months", format="%d"),
-                    "Total_Amount": st.column_config.NumberColumn("Total Amount (₹)", format="₹%.2f"),
-                    "Total_Refunds": st.column_config.NumberColumn("Total Refunds", format="%d")
-                }
-            )
-        else:
-            st.info("No products with repeated refund issues found")
-        
-        # Monthly Product Breakdown
-        st.markdown("---")
-        st.markdown("### 📊 Monthly Product Refund Breakdown")
-        
-        if 'monthly_products' in st.session_state and not st.session_state.monthly_products.empty:
-            st.dataframe(
-                st.session_state.monthly_products,
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "Month": st.column_config.TextColumn("Month"),
-                    "Product": st.column_config.TextColumn("Product Name"),
-                    "Total_Amount": st.column_config.NumberColumn("Total Amount (₹)", format="₹%.2f"),
-                    "Refund_Count": st.column_config.NumberColumn("Refund Count", format="%d")
-                }
-            )
-        else:
-            st.info("No monthly product data available")
 
 # ================= FOOTER =================
 st.markdown("---")
