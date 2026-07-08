@@ -4,6 +4,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
 import numpy as np
+import re
 
 # ================= CONFIG =================
 st.set_page_config(page_title="Refund Tracker", layout="wide")
@@ -11,7 +12,274 @@ st.set_page_config(page_title="Refund Tracker", layout="wide")
 st.title("💰 Refund Tracker")
 st.info("Rule: Less than 5 refunds → APPROVE | 5 or more refunds → DENY")
 
-# Custom CSS for better styling
+# ================= CITY NAME STANDARDIZATION =================
+def standardize_city_name(city):
+    """
+    Standardize city names to handle spelling variations.
+    ONLY standardizes actual city names, NOT hub codes.
+    """
+    if pd.isna(city) or city == "" or city == "Unknown":
+        return "Unknown"
+    
+    city = str(city).strip()
+    city_lower = city.lower()
+    
+    # City mapping dictionary - ONLY for actual city names
+    city_mapping = {
+        # Bengaluru variations
+        'bengaluru': 'Bengaluru',
+        'bangalore': 'Bengaluru',
+        'bengaluru ': 'Bengaluru',
+        'bengaluur': 'Bengaluru',
+        'bengaluruu': 'Bengaluru',
+        'bengaliuru': 'Bengaluru',
+        'bengaluur': 'Bengaluru',
+        'banglore': 'Bengaluru',
+        'bangalore ': 'Bengaluru',
+        'bengaluru x': 'Bengaluru',
+        'bengaluru ,': 'Bengaluru',
+        'bengaluru,': 'Bengaluru',
+        'bnegaluru': 'Bengaluru',
+        'brngaluru': 'Bengaluru',
+        'benaluru': 'Bengaluru',
+        'bengaluruw': 'Bengaluru',
+        'begaluru': 'Bengaluru',
+        'bengaluru, ': 'Bengaluru',
+        'bengaluru,': 'Bengaluru',
+        
+        # Bhubaneswar variations
+        'bhubaneswar': 'Bhubaneswar',
+        'bhubaneswar ': 'Bhubaneswar',
+        'bhubaneswar,': 'Bhubaneswar',
+        'bhuvaneswar': 'Bhubaneswar',
+        'bhuabaneswar': 'Bhubaneswar',
+        'bhubaneswar,': 'Bhubaneswar',
+        'bhubaneswar, ': 'Bhubaneswar',
+        'bhubaneswar,': 'Bhubaneswar',
+        
+        # Hyderabad variations
+        'hyderabad': 'Hyderabad',
+        'hyderabad ': 'Hyderabad',
+        'hyderabafd': 'Hyderabad',
+        'hyderabd': 'Hyderabad',
+        'hydrabad': 'Hyderabad',
+        'hyderavad': 'Hyderabad',
+        'hyfderabad': 'Hyderabad',
+        'hyd': 'Hyderabad',
+        'hydersbad': 'Hyderabad',
+        'hyderabad,': 'Hyderabad',
+        'hyd,': 'Hyderabad',
+        'hyderabad, ': 'Hyderabad',
+        'hyderabad,': 'Hyderabad',
+        
+        # Pune variations
+        'pune': 'Pune',
+        'pune ': 'Pune',
+        'pune,': 'Pune',
+        'punr': 'Pune',
+        'pune1': 'Pune',
+        'pune`': 'Pune',
+        'pune, ': 'Pune',
+        'pune,': 'Pune',
+        
+        # Lucknow variations
+        'lucknow': 'Lucknow',
+        'lucknow ': 'Lucknow',
+        'lucknow,': 'Lucknow',
+        'lucknow, ': 'Lucknow',
+        'lukcnow': 'Lucknow',
+        'luckmow': 'Lucknow',
+        'lucknw': 'Lucknow',
+        'luckno': 'Lucknow',
+        'lucknoe': 'Lucknow',
+        'lucknonw': 'Lucknow',
+        'lucknowq': 'Lucknow',
+        'luckow': 'Lucknow',
+        'lucknoq': 'Lucknow',
+        'luknow': 'Lucknow',
+        'luckmnow': 'Lucknow',
+        'lucknow,': 'Lucknow',
+        'lucknow q': 'Lucknow',
+        'lucknow.': 'Lucknow',
+        'lucKNOW': 'Lucknow',
+        'lUCKNOW': 'Lucknow',
+        'lucknow,': 'Lucknow',
+        'lucknow ': 'Lucknow',
+        'lucknow,': 'Lucknow',
+        'lucknow, ': 'Lucknow',
+        'lucknow,': 'Lucknow',
+        
+        # Patna variations
+        'patna': 'Patna',
+        'patna ': 'Patna',
+        'patna,': 'Patna',
+        'patna, ': 'Patna',
+        'patbna': 'Patna',
+        'pstna': 'Patna',
+        'patha': 'Patna',
+        'patna,': 'Patna',
+        'patna, ': 'Patna',
+        'patna,': 'Patna',
+        
+        # Ranchi variations
+        'ranchi': 'Ranchi',
+        'ranchi ': 'Ranchi',
+        'ranchi,': 'Ranchi',
+        'ranchi, ': 'Ranchi',
+        'ranhi': 'Ranchi',
+        'ranci': 'Ranchi',
+        'rancchi': 'Ranchi',
+        'ranc': 'Ranchi',
+        'rachi': 'Ranchi',
+        'ranchio': 'Ranchi',
+        'rancihi': 'Ranchi',
+        'ranch,': 'Ranchi',
+        'ranch, ': 'Ranchi',
+        
+        # Jamshedpur variations
+        'jamshedpur': 'Jamshedpur',
+        'jamshedpur ': 'Jamshedpur',
+        'jamshedpur,': 'Jamshedpur',
+        'jhamshedpur': 'Jamshedpur',
+        'jhemshedpur': 'Jamshedpur',
+        'jamshedpur,': 'Jamshedpur',
+        'jamshedpur, ': 'Jamshedpur',
+        'jamshedpur,': 'Jamshedpur',
+        'jhamshedpur': 'Jamshedpur',
+        
+        # Mysore variations
+        'mysore': 'Mysore',
+        'mysore ': 'Mysore',
+        'mysore,': 'Mysore',
+        'mysuru': 'Mysore',
+        'mysuru ': 'Mysore',
+        'mysore,': 'Mysore',
+        'mysore, ': 'Mysore',
+        
+        # Tumkur variations
+        'tumkur': 'Tumkur',
+        'tumkur ': 'Tumkur',
+        'tumkur,': 'Tumkur',
+        'tumkur, ': 'Tumkur',
+        
+        # Hosur variations
+        'hosur': 'Hosur',
+        'hosur ': 'Hosur',
+        'hosur,': 'Hosur',
+        'hosur, ': 'Hosur',
+        
+        # Hassan variations
+        'hassan': 'Hassan',
+        'hassan ': 'Hassan',
+        'hassan,': 'Hassan',
+        
+        # Chennai variations
+        'chennai': 'Chennai',
+        'chennai ': 'Chennai',
+        'chennai,': 'Chennai',
+        'chennai, ': 'Chennai',
+        
+        # Ahmedabad variations
+        'ahmedabad': 'Ahmedabad',
+        'ahmedabad ': 'Ahmedabad',
+        'ahmedabad,': 'Ahmedabad',
+        'ahamedabad': 'Ahmedabad',
+        'ahmedabadh': 'Ahmedabad',
+        'ahemdabad': 'Ahmedabad',
+        'ahmedabad,': 'Ahmedabad',
+        'ahmedabad, ': 'Ahmedabad',
+        'ahmedabad,': 'Ahmedabad',
+        'ahmedabad,': 'Ahmedabad',
+        
+        # Mandya variations
+        'mandya': 'Mandya',
+        'mandya ': 'Mandya',
+        'mandya,': 'Mandya',
+        
+        # Sangareddy variations
+        'sangareddy': 'Sangareddy',
+        'sangareddy ': 'Sangareddy',
+        'sangareddy,': 'Sangareddy',
+        
+        # Kanpur variations
+        'kanpur': 'Kanpur',
+        'kanpur ': 'Kanpur',
+        'kanpur,': 'Kanpur',
+        'kanpur, ': 'Kanpur',
+        
+        # Vizag variations
+        'vizag': 'Vizag',
+        'vizag ': 'Vizag',
+        'vizag,': 'Vizag',
+        
+        # Unnao variations
+        'unnao': 'Unnao',
+        'unnao ': 'Unnao',
+        'unnao,': 'Unnao',
+        
+        # Samastipur variations
+        'samastipur': 'Samastipur',
+        'samastipur ': 'Samastipur',
+        'samastipur,': 'Samastipur',
+        
+        # Siddipet variations
+        'siddipet': 'Siddipet',
+        'siddipet ': 'Siddipet',
+        'siddipet,': 'Siddipet',
+        
+        # Krishnagiri variations
+        'krishnagiri': 'Krishnagiri',
+        'krishnagiri ': 'Krishnagiri',
+        'krishnagiri,': 'Krishnagiri',
+        
+        # Other variations
+        'arihant': 'Bengaluru',
+        'aslali': 'Ahmedabad',
+        'hennur': 'Bengaluru',
+        'kudlu': 'Bengaluru',
+        'lonikand': 'Pune',
+        'marathahalli': 'Bengaluru',
+        'peenya': 'Bengaluru',
+        'srinivas': 'Unknown',
+        'bhubaneswar,': 'Bhubaneswar',
+        'bhubaneswar, ': 'Bhubaneswar',
+        'bhubaneswar,': 'Bhubaneswar',
+        'bhubaneswar,': 'Bhubaneswar',
+    }
+    
+    # Check if city exists in mapping (case insensitive)
+    if city_lower in city_mapping:
+        return city_mapping[city_lower]
+    
+    # Check if city contains known city names
+    for key, value in city_mapping.items():
+        if key in city_lower or city_lower in key:
+            return value
+    
+    # Remove extra characters and try again
+    city_clean = re.sub(r'[,._\-()]', ' ', city)
+    city_clean = ' '.join(city_clean.split())
+    
+    if city_clean.lower() in city_mapping:
+        return city_mapping[city_clean.lower()]
+    
+    # If it's a phone number or numeric, keep as is
+    if re.match(r'^[\d\s]+$', city):
+        return city
+    
+    # If it contains underscore, it might be a hub code - keep as is
+    if '_' in city and len(city) <= 15:
+        return city
+    
+    # If it's a known hub code pattern (BLR_, BLR_, etc.), keep as is
+    hub_patterns = ['BLR_', 'HYD_', 'PUN_', 'LKO_', 'OD_', 'BH_', 'MYS_', '3P_']
+    for pattern in hub_patterns:
+        if pattern in city.upper():
+            return city
+    
+    return city
+
+# ================= Custom CSS =================
 st.markdown("""
     <style>
     .metric-card {
@@ -342,7 +610,6 @@ def get_product_refund_data(cash_df, jc_df, manual_df, year, current_month):
             # For cash/UPI sheet, try to get from Order Item ID or DH NAME
             for col in ["Order Item ID", "Order Item Id", "DH NAME", "DH Name"]:
                 if col in df.columns:
-                    # Try to map to product name if available
                     df["Product"] = df[col].astype(str)
                     break
             else:
@@ -353,7 +620,7 @@ def get_product_refund_data(cash_df, jc_df, manual_df, year, current_month):
         df["Product"] = df["Product"].str.replace("_", " ", regex=False)
         df["Product"] = df["Product"].str.strip()
         
-        # Find City column
+        # Find City column and standardize (but keep hub codes as-is)
         city_col = None
         for col in ["City", "city", "City Name", "CityName"]:
             if col in df.columns:
@@ -361,11 +628,11 @@ def get_product_refund_data(cash_df, jc_df, manual_df, year, current_month):
                 break
         
         if city_col:
-            df["City"] = df[city_col].astype(str)
+            df["City"] = df[city_col].astype(str).apply(standardize_city_name)
         else:
             df["City"] = "Unknown"
         
-        # Find Hub column
+        # Find Hub column - keep original hub codes
         hub_col = None
         for col in ["Hub", "hub", "Hub ID", "HUB ID", "Hub Name"]:
             if col in df.columns:
@@ -401,7 +668,7 @@ def get_product_refund_data(cash_df, jc_df, manual_df, year, current_month):
         Total_Amount=("Amount", "sum")
     ).reset_index().sort_values(["Hub", "Total_Amount"], ascending=[True, False])
     
-    # City-wise product refunds
+    # City-wise product refunds (with standardized city names)
     city_product = all_product.groupby(["City", "Product"]).agg(
         Ticket_Count=("Amount", "count"),
         Total_Amount=("Amount", "sum")
@@ -411,7 +678,7 @@ def get_product_refund_data(cash_df, jc_df, manual_df, year, current_month):
 
 @st.cache_data(ttl=300)
 def get_hub_analysis(cash_df, jc_df, manual_df, year, current_month):
-    """Hub-wise analysis with counts and amounts"""
+    """Hub-wise analysis with counts and amounts (keeps original hub codes)"""
     
     def prepare_hub_df(df):
         if df.empty:
@@ -490,7 +757,7 @@ def get_hub_analysis(cash_df, jc_df, manual_df, year, current_month):
 
 @st.cache_data(ttl=300)
 def get_city_analysis(cash_df, jc_df, manual_df, year, current_month):
-    """City-wise analysis with counts and amounts"""
+    """City-wise analysis with standardized city names"""
     
     def prepare_city_df(df):
         if df.empty:
@@ -544,7 +811,8 @@ def get_city_analysis(cash_df, jc_df, manual_df, year, current_month):
                 break
         
         if city_col:
-            df["City"] = df[city_col].astype(str)
+            # Apply city name standardization (hub codes will be kept as-is)
+            df["City"] = df[city_col].astype(str).apply(standardize_city_name)
         else:
             df["City"] = "Unknown"
         
@@ -1505,7 +1773,7 @@ with tabs[3]:
 # ================= TAB 5: City Analysis =================
 with tabs[4]:
     st.markdown("## 🏙️ City Analysis")
-    st.markdown("*City-wise refund instances, amounts, and unique customers*")
+    st.markdown("*City-wise refund instances, amounts, and unique customers (standardized city names)*")
     
     @st.cache_data(ttl=300)
     def load_city_data():
