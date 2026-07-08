@@ -83,11 +83,8 @@ st.markdown("""
         background-color: #f8d7da;
         font-weight: bold;
     }
-    .risk-medium {
+    .risk-potential {
         background-color: #fff3cd;
-    }
-    .risk-inactive {
-        background-color: #e9ecef;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -199,6 +196,123 @@ def get_monthly_counts(df, bzid, year):
             monthly_counts.append(0)
         month_names.append(datetime(year, month, 1).strftime("%B"))
     return month_names, monthly_counts
+
+# ================= GET PRODUCT AND CITY ANALYSIS =================
+@st.cache_data(ttl=300)
+def get_product_city_analysis(cash_df, jc_df, manual_df, year, current_month):
+    """Analyze product and city trends for refunds"""
+    
+    def prepare_analysis_df(df):
+        if df.empty:
+            return pd.DataFrame(columns=["BZID", "Date", "Amount", "Product", "City"])
+        
+        df = df.copy()
+        
+        # Find BZID column
+        bzid_col = None
+        for col in ["BZID", "Business ID", "BZD", "bzid"]:
+            if col in df.columns:
+                bzid_col = col
+                break
+        
+        if bzid_col is None:
+            return pd.DataFrame(columns=["BZID", "Date", "Amount", "Product", "City"])
+        
+        df["BZID"] = df[bzid_col].astype(str).str.strip().str.upper()
+        
+        # Find Date column
+        date_col = None
+        for col in ["Date", "date", "Timestamp", "timestamp"]:
+            if col in df.columns:
+                date_col = col
+                break
+        
+        if date_col is None:
+            return pd.DataFrame(columns=["BZID", "Date", "Amount", "Product", "City"])
+        
+        df["Date"] = pd.to_datetime(df[date_col], errors="coerce")
+        
+        if df["Date"].isna().all():
+            try:
+                df["Date"] = pd.to_datetime(df[date_col], errors="coerce", infer_datetime_format=True)
+            except:
+                pass
+        
+        if df["Date"].isna().all():
+            return pd.DataFrame(columns=["BZID", "Date", "Amount", "Product", "City"])
+        
+        # Filter to current year up to current month
+        df = df[
+            (df["Date"].dt.year == year) &
+            (df["Date"].dt.month <= current_month) &
+            (df["Date"].notna())
+        ]
+        
+        if df.empty:
+            return pd.DataFrame(columns=["BZID", "Date", "Amount", "Product", "City"])
+        
+        # Find Amount column
+        amount_col = None
+        for col in ["Amount", "amount", "Refund Amount"]:
+            if col in df.columns:
+                amount_col = col
+                break
+        
+        if amount_col:
+            df["Amount"] = pd.to_numeric(df[amount_col], errors="coerce").fillna(0)
+        else:
+            df["Amount"] = 0
+        
+        # Find Product column
+        product_col = None
+        for col in ["Product Name", "Product", "Item", "Order Item ID", "Order Item Id"]:
+            if col in df.columns:
+                product_col = col
+                break
+        
+        if product_col:
+            df["Product"] = df[product_col].astype(str)
+        else:
+            df["Product"] = "Unknown"
+        
+        # Find City column
+        city_col = None
+        for col in ["City", "city", "Hub", "hub"]:
+            if col in df.columns:
+                city_col = col
+                break
+        
+        if city_col:
+            df["City"] = df[city_col].astype(str)
+        else:
+            df["City"] = "Unknown"
+        
+        return df[["BZID", "Date", "Amount", "Product", "City"]]
+    
+    # Prepare all dataframes
+    cash_analysis = prepare_analysis_df(cash_df)
+    jc_analysis = prepare_analysis_df(jc_df)
+    manual_analysis = prepare_analysis_df(manual_df)
+    
+    # Combine all data
+    all_analysis = pd.concat([cash_analysis, jc_analysis, manual_analysis], ignore_index=True)
+    
+    if all_analysis.empty:
+        return pd.DataFrame(), pd.DataFrame()
+    
+    # Top products by refund amount
+    top_products = all_analysis.groupby("Product").agg(
+        Total_Amount=("Amount", "sum"),
+        Refund_Count=("BZID", "count")
+    ).reset_index().sort_values("Total_Amount", ascending=False).head(10)
+    
+    # Top cities by refund amount
+    top_cities = all_analysis.groupby("City").agg(
+        Total_Amount=("Amount", "sum"),
+        Refund_Count=("BZID", "count")
+    ).reset_index().sort_values("Total_Amount", ascending=False).head(10)
+    
+    return top_products, top_cities
 
 # ================= OPTIMIZED: GET HIGH RISK CUSTOMERS =================
 @st.cache_data(ttl=300)
@@ -358,12 +472,9 @@ def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_m
         months_with_refunds = sum(1 for c in monthly_counts if c > 0)
         max_monthly_refunds = max(monthly_counts) if monthly_counts else 0
         
-        # Check if active in last 3 months (has refunds in at least 2 of the last 3 months)
+        # Check if active in last 3 months
         last_3_months = monthly_counts[-3:] if len(monthly_counts) >= 3 else monthly_counts
         active_in_last_3 = sum(1 for c in last_3_months if c > 0) >= 2
-        
-        # Check if any month has 5+ refunds (policy breach)
-        has_policy_breach = max_monthly_refunds >= 5
         
         # Get total amount
         total_amount = sum(monthly_amounts)
@@ -373,22 +484,16 @@ def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_m
         jc_total = jc_prep[jc_prep["BZID"] == bzid]["Amount"].sum() if not jc_prep.empty else 0
         manual_total = manual_prep[manual_prep["BZID"] == bzid]["Amount"].sum() if not manual_prep.empty else 0
         
-        # ===== UPDATED RISK ASSESSMENT =====
-        # CHANGED: High Frequency threshold from >= 3 to >= 5
-        is_high_frequency = avg_refunds >= 5  # Only customers with 5+ avg refunds per month
-        is_high_amount = total_amount >= 500
-        is_policy_breach = has_policy_breach
-        is_active = active_in_last_3
-        
-        # EXTREME: Active AND (Policy Breach OR High Frequency OR High Amount)
-        if is_active and (is_policy_breach or is_high_frequency or is_high_amount):
+        # ===== NEW RISK ASSESSMENT =====
+        # 1. EXTREME: Amount > 1000 AND Avg >= 3
+        if total_amount > 1000 and avg_refunds >= 3:
             risk_level = "🔴🔴 EXTREME"
-        # HIGH: Policy Breach (even if inactive) OR Active with pattern
-        elif is_policy_breach or (is_active and (is_high_frequency or months_with_refunds >= 3)):
+        # 2. HIGH: Amount <= 1000 AND Avg >= 3
+        elif total_amount <= 1000 and avg_refunds >= 3:
             risk_level = "🔴 HIGH"
-        # MEDIUM: Historical pattern but inactive
-        elif (is_high_frequency or is_high_amount) and not is_active:
-            risk_level = "🟡 MEDIUM"
+        # 3. POTENTIAL: Other patterns (Avg < 3 but showing signs)
+        elif avg_refunds >= 2 or months_with_refunds >= 3:
+            risk_level = "🟡 POTENTIAL"
         else:
             continue
         
@@ -402,7 +507,7 @@ def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_m
                     monthly_breakdown[month_abbr[i]] = "0"
         
         # Add activity status
-        activity_status = "🔴 Active" if is_active else "⏸️ Inactive"
+        activity_status = "🔴 Active" if active_in_last_3 else "⏸️ Inactive"
         
         results.append({
             "BZID": bzid,
@@ -412,11 +517,10 @@ def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_m
             "Monthly Average": round(avg_refunds, 2),
             "Months Active": months_with_refunds,
             "Max Monthly Refunds": max_monthly_refunds,
-            "Policy Breach": "Yes" if has_policy_breach else "No",
+            "Total Amount": round(total_amount, 2),
             "Cash_UPI": round(cash_total, 2),
             "Jumbocash": round(jc_total, 2),
             "Manual_Cash": round(manual_total, 2),
-            "Total_Amount": round(total_amount, 2),
             **monthly_breakdown
         })
     
@@ -428,7 +532,7 @@ if st.button("🔄 Refresh Data"):
     st.rerun()
 
 # ================= TAB SELECTION =================
-tab1, tab2 = st.tabs(["🔍 Individual Search", "📊 High Risk Customers"])
+tab1, tab2, tab3 = st.tabs(["🔍 Individual Search", "📊 High Risk Customers", "📈 Product & City Analysis"])
 
 # ================= TAB 1: Individual Search =================
 with tab1:
@@ -873,16 +977,14 @@ with tab2:
     # Add explanation box with updated criteria
     st.markdown("""
     <div class="info-box">
-        <b>📖 10X Risk Assessment - Updated Criteria:</b><br><br>
-        <b>🔴🔴 EXTREME RISK:</b> Actively taking refunds (last 3 months) AND (Policy Breach OR High Frequency OR High Amount)<br>
-        <b>🔴 HIGH RISK:</b> Policy Breach (even if inactive) OR Active with pattern<br>
-        <b>🟡 MEDIUM RISK:</b> Historical pattern (High Frequency or High Amount) but not active recently<br>
-        <b>⏸️ Inactive:</b> Customer had refunds but stopped (no refunds in recent months)<br><br>
-        <b>Key Definitions:</b><br>
-        • <b>High Frequency:</b> Average refunds >= 5 per month<br>
-        • <b>High Amount:</b> Total refunds >= ₹500<br>
-        • <b>Policy Breach:</b> 5+ refunds in any single month<br>
-        • <b>Active:</b> Refunds in at least 2 of the last 3 months
+        <b>📖 New Risk Assessment Criteria:</b><br><br>
+        <b>🔴🔴 EXTREME RISK:</b> Total Amount > ₹1,000 AND Average Refunds >= 3 per month<br>
+        <b>🔴 HIGH RISK:</b> Total Amount <= ₹1,000 AND Average Refunds >= 3 per month<br>
+        <b>🟡 POTENTIAL RISK:</b> Average Refunds >= 2 OR Active in 3+ months (pattern emerging)<br><br>
+        <b>Key Difference:</b> We now separate by <b>AMOUNT</b> to prioritize high-value customers.<br>
+        • ₹1,200 with avg 4 refunds = 🔴🔴 EXTREME<br>
+        • ₹800 with avg 4 refunds = 🔴 HIGH<br>
+        • ₹500 with avg 2 refunds = 🟡 POTENTIAL
     </div>
     """, unsafe_allow_html=True)
     
@@ -931,16 +1033,16 @@ with tab2:
     if st.session_state.high_risk_data is not None and not st.session_state.high_risk_data.empty:
         high_risk_df = st.session_state.high_risk_data
         
-        # Sort by risk level (EXTREME first, then HIGH, then MEDIUM)
-        risk_order = {"🔴🔴 EXTREME": 0, "🔴 HIGH": 1, "🟡 MEDIUM": 2}
+        # Sort by risk level
+        risk_order = {"🔴🔴 EXTREME": 0, "🔴 HIGH": 1, "🟡 POTENTIAL": 2}
         high_risk_df["Risk_Order"] = high_risk_df["Risk Level"].map(risk_order)
-        high_risk_df = high_risk_df.sort_values(["Risk_Order", "Total Refunds"], ascending=[True, False])
+        high_risk_df = high_risk_df.sort_values(["Risk_Order", "Total Amount"], ascending=[True, False])
         high_risk_df = high_risk_df.drop(columns=["Risk_Order"])
         
         st.success(f"Found {len(high_risk_df)} high-risk customers")
         
         # Display metrics
-        col1, col2, col3, col4, col5, col6 = st.columns(6)
+        col1, col2, col3, col4, col5 = st.columns(5)
         with col1:
             st.metric("Total High Risk", len(high_risk_df))
         with col2:
@@ -950,12 +1052,10 @@ with tab2:
             high_count = len(high_risk_df[high_risk_df["Risk Level"] == "🔴 HIGH"])
             st.metric("🔴 High Risk", high_count)
         with col4:
-            medium_count = len(high_risk_df[high_risk_df["Risk Level"] == "🟡 MEDIUM"])
-            st.metric("🟡 Medium", medium_count)
+            potential_count = len(high_risk_df[high_risk_df["Risk Level"] == "🟡 POTENTIAL"])
+            st.metric("🟡 Potential", potential_count)
         with col5:
-            st.metric("Total Refunds", int(high_risk_df["Total Refunds"].sum()))
-        with col6:
-            st.metric("Total Amount", f"₹{high_risk_df['Total_Amount'].sum():,.2f}")
+            st.metric("Total Amount", f"₹{high_risk_df['Total Amount'].sum():,.2f}")
         
         # Get month columns
         month_abbr = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", 
@@ -965,16 +1065,15 @@ with tab2:
         column_config = {
             "BZID": st.column_config.TextColumn("BZID"),
             "Risk Level": st.column_config.TextColumn("Risk Level"),
-            "Status": st.column_config.TextColumn("Status", help="Active (last 3 months) or Inactive"),
+            "Status": st.column_config.TextColumn("Status"),
             "Total Refunds": st.column_config.NumberColumn("Total Refunds", format="%d"),
             "Monthly Average": st.column_config.NumberColumn("Avg/Month", format="%.2f"),
             "Months Active": st.column_config.NumberColumn("Months Active", format="%d"),
             "Max Monthly Refunds": st.column_config.NumberColumn("Max/Month", format="%d"),
-            "Policy Breach": st.column_config.TextColumn("Policy Breach"),
+            "Total Amount": st.column_config.NumberColumn("Total Amount (₹)", format="₹%.2f"),
             "Cash_UPI": st.column_config.NumberColumn("Cash/UPI (₹)", format="₹%.2f"),
             "Jumbocash": st.column_config.NumberColumn("Jumbocash (₹)", format="₹%.2f"),
             "Manual_Cash": st.column_config.NumberColumn("Manual Cash (₹)", format="₹%.2f"),
-            "Total_Amount": st.column_config.NumberColumn("Total Amount (₹)", format="₹%.2f"),
         }
         
         for month in month_abbr:
@@ -986,15 +1085,12 @@ with tab2:
         # Apply styling
         def highlight_risk(row):
             risk = row.get('Risk Level', '')
-            status = row.get('Status', '')
             
             if 'EXTREME' in risk:
                 return ['background-color: #dc3545; color: white; font-weight: bold;'] * len(row)
             elif 'HIGH' in risk:
                 return ['background-color: #f8d7da; font-weight: bold;'] * len(row)
-            elif 'MEDIUM' in risk:
-                if 'Inactive' in status:
-                    return ['background-color: #e9ecef;'] * len(row)
+            elif 'POTENTIAL' in risk:
                 return ['background-color: #fff3cd;'] * len(row)
             return [''] * len(row)
         
@@ -1018,6 +1114,115 @@ with tab2:
         
     elif st.session_state.high_risk_data is not None and st.session_state.high_risk_data.empty:
         st.info("✅ No high-risk customers found!")
+
+# ================= TAB 3: Product & City Analysis =================
+with tab3:
+    st.markdown("## 📦 Product & City Refund Analysis")
+    st.markdown("*Identify which products and cities are driving the highest refunds*")
+    
+    # Load data
+    @st.cache_data(ttl=300)
+    def load_analysis_data():
+        with st.spinner("Loading data..."):
+            cash_df = load_sheet(
+                st.secrets["cash_upi_sheet_id"],
+                "Form Responses 1"
+            )
+            
+            jc_df = load_sheet(
+                st.secrets["jumbocash_sheet_id"],
+                "Form Responses 1"
+            )
+            
+            manual_df = load_sheet(
+                st.secrets["cash_upi_sheet_id"],
+                "cash refund"
+            )
+            
+            return cash_df, jc_df, manual_df
+    
+    if st.button("🔄 Load Analysis"):
+        cash_df, jc_df, manual_df = load_analysis_data()
+        
+        with st.spinner("Analyzing product and city trends..."):
+            top_products, top_cities = get_product_city_analysis(
+                cash_df, jc_df, manual_df, current_year, current_month
+            )
+            
+            st.session_state.top_products = top_products
+            st.session_state.top_cities = top_cities
+    
+    # Display analysis
+    if 'top_products' in st.session_state and 'top_cities' in st.session_state:
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("### 🏆 Top Products by Refund Amount")
+            if not st.session_state.top_products.empty:
+                # Show top products with bar chart
+                st.dataframe(
+                    st.session_state.top_products,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Product": st.column_config.TextColumn("Product"),
+                        "Total_Amount": st.column_config.NumberColumn("Total Amount (₹)", format="₹%.2f"),
+                        "Refund_Count": st.column_config.NumberColumn("Refund Count", format="%d")
+                    }
+                )
+                
+                # Bar chart for products
+                if len(st.session_state.top_products) > 1:
+                    st.bar_chart(
+                        st.session_state.top_products.set_index("Product")["Total_Amount"],
+                        use_container_width=True
+                    )
+            else:
+                st.info("No product data available")
+        
+        with col2:
+            st.markdown("### 🏙️ Top Cities by Refund Amount")
+            if not st.session_state.top_cities.empty:
+                st.dataframe(
+                    st.session_state.top_cities,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "City": st.column_config.TextColumn("City"),
+                        "Total_Amount": st.column_config.NumberColumn("Total Amount (₹)", format="₹%.2f"),
+                        "Refund_Count": st.column_config.NumberColumn("Refund Count", format="%d")
+                    }
+                )
+                
+                # Bar chart for cities
+                if len(st.session_state.top_cities) > 1:
+                    st.bar_chart(
+                        st.session_state.top_cities.set_index("City")["Total_Amount"],
+                        use_container_width=True
+                    )
+            else:
+                st.info("No city data available")
+        
+        # Summary metrics
+        if not st.session_state.top_products.empty:
+            st.markdown("---")
+            st.markdown("### 📊 Summary Insights")
+            
+            total_refund_amount = st.session_state.top_products["Total_Amount"].sum()
+            top_product = st.session_state.top_products.iloc[0]
+            top_city = st.session_state.top_cities.iloc[0] if not st.session_state.top_cities.empty else None
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Total Refund Amount", f"₹{total_refund_amount:,.2f}")
+            with col2:
+                st.metric("Top Refund Product", top_product["Product"][:30] if len(top_product["Product"]) > 30 else top_product["Product"])
+            with col3:
+                if top_city is not None:
+                    st.metric("Top Refund City", top_city["City"])
+        
+    elif 'top_products' in st.session_state:
+        st.info("Click 'Load Analysis' to view product and city trends")
 
 # ================= FOOTER =================
 st.markdown("---")
