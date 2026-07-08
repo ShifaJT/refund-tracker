@@ -374,8 +374,9 @@ def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_m
         manual_total = manual_prep[manual_prep["BZID"] == bzid]["Amount"].sum() if not manual_prep.empty else 0
         
         # ===== UPDATED RISK ASSESSMENT =====
-        is_high_frequency = avg_refunds >= 3
-        is_high_amount = total_amount >= 500  # LOWERED from 1000 to 500 to catch more customers
+        # CHANGED: High Frequency threshold from >= 3 to >= 5
+        is_high_frequency = avg_refunds >= 5  # Only customers with 5+ avg refunds per month
+        is_high_amount = total_amount >= 500
         is_policy_breach = has_policy_breach
         is_active = active_in_last_3
         
@@ -877,10 +878,11 @@ with tab2:
         <b>🔴 HIGH RISK:</b> Policy Breach (even if inactive) OR Active with pattern<br>
         <b>🟡 MEDIUM RISK:</b> Historical pattern (High Frequency or High Amount) but not active recently<br>
         <b>⏸️ Inactive:</b> Customer had refunds but stopped (no refunds in recent months)<br><br>
-        <b>Key Difference:</b> We now focus on <b>ACTIVE</b> patterns AND <b>HIGH VALUE</b> customers.<br>
-        • Customer with ₹990 refunds actively = 🔴🔴 EXTREME (High Frequency)<br>
-        • Customer with ₹2,229 refunds actively = 🔴🔴 EXTREME<br>
-        • Customer with ₹3,750 refunds but stopped = 🔴 HIGH
+        <b>Key Definitions:</b><br>
+        • <b>High Frequency:</b> Average refunds >= 5 per month<br>
+        • <b>High Amount:</b> Total refunds >= ₹500<br>
+        • <b>Policy Breach:</b> 5+ refunds in any single month<br>
+        • <b>Active:</b> Refunds in at least 2 of the last 3 months
     </div>
     """, unsafe_allow_html=True)
     
