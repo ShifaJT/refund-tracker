@@ -268,25 +268,22 @@ def get_monthly_summary(cash_df, jc_df, manual_df, year, current_month):
     if all_summary.empty:
         return pd.DataFrame()
     
-    # Group by month
     monthly_data = all_summary.groupby("Month").agg(
         Refunded_Cases=("Amount", "count"),
         Total_Amount=("Amount", "sum")
     ).reset_index()
     
-    # Add Total Requests Received (refunded + non-refunded)
-    # Since we only have refunded data, we'll use refunded cases as proxy
-    monthly_data["Total_Requests_Received"] = monthly_data["Refunded_Cases"] * 2  # Placeholder
+    monthly_data["Total_Requests_Received"] = monthly_data["Refunded_Cases"]
     
     return monthly_data
 
 @st.cache_data(ttl=300)
-def get_city_wise_data(cash_df, jc_df, manual_df, year, current_month):
-    """Data 2: City-wise D-1 Amount Refunded, Present Month Cumulative Refund, Last Month Cumulative Refund, Difference"""
+def get_product_refund_data(cash_df, jc_df, manual_df, year, current_month):
+    """Data 6: Product Title, Ticket Count, Total Amount (with actual product names)"""
     
-    def prepare_city_df(df):
+    def prepare_product_df(df, source_type):
         if df.empty:
-            return pd.DataFrame(columns=["City", "Date", "Amount"])
+            return pd.DataFrame(columns=["Product", "Amount", "BZID", "City", "Hub"])
         
         df = df.copy()
         
@@ -298,14 +295,15 @@ def get_city_wise_data(cash_df, jc_df, manual_df, year, current_month):
                 break
         
         if date_col is None:
-            return pd.DataFrame(columns=["City", "Date", "Amount"])
+            return pd.DataFrame(columns=["Product", "Amount", "BZID", "City", "Hub"])
         
         df["Date"] = pd.to_datetime(df[date_col], errors="coerce")
         df = df[df["Date"].notna()]
         df = df[df["Date"].dt.year == year]
+        df = df[df["Date"].dt.month <= current_month]
         
         if df.empty:
-            return pd.DataFrame(columns=["City", "Date", "Amount"])
+            return pd.DataFrame(columns=["Product", "Amount", "BZID", "City", "Hub"])
         
         # Find Amount column
         amount_col = None
@@ -319,9 +317,45 @@ def get_city_wise_data(cash_df, jc_df, manual_df, year, current_month):
         else:
             df["Amount"] = 0
         
+        # Find BZID column
+        bzid_col = None
+        for col in ["BZID", "Business ID", "BZD", "bzid"]:
+            if col in df.columns:
+                bzid_col = col
+                break
+        
+        if bzid_col:
+            df["BZID"] = df[bzid_col].astype(str).str.strip().str.upper()
+        else:
+            df["BZID"] = "Unknown"
+        
+        # Find Product column - prioritize actual product names
+        product_col = None
+        for col in ["Product Name", "Product", "Product name", "product_name", "Item Name", "item_name"]:
+            if col in df.columns:
+                product_col = col
+                break
+        
+        if product_col:
+            df["Product"] = df[product_col].astype(str)
+        else:
+            # For cash/UPI sheet, try to get from Order Item ID or DH NAME
+            for col in ["Order Item ID", "Order Item Id", "DH NAME", "DH Name"]:
+                if col in df.columns:
+                    # Try to map to product name if available
+                    df["Product"] = df[col].astype(str)
+                    break
+            else:
+                df["Product"] = "Unknown Product"
+        
+        # Clean product names
+        df["Product"] = df["Product"].str.replace("BLTORDITM-", "", regex=False)
+        df["Product"] = df["Product"].str.replace("_", " ", regex=False)
+        df["Product"] = df["Product"].str.strip()
+        
         # Find City column
         city_col = None
-        for col in ["City", "city", "Hub", "hub", "City Name", "CityName"]:
+        for col in ["City", "city", "City Name", "CityName"]:
             if col in df.columns:
                 city_col = col
                 break
@@ -331,45 +365,60 @@ def get_city_wise_data(cash_df, jc_df, manual_df, year, current_month):
         else:
             df["City"] = "Unknown"
         
-        df["Month"] = df["Date"].dt.month
+        # Find Hub column
+        hub_col = None
+        for col in ["Hub", "hub", "Hub ID", "HUB ID", "Hub Name"]:
+            if col in df.columns:
+                hub_col = col
+                break
         
-        return df[["City", "Month", "Amount"]]
+        if hub_col:
+            df["Hub"] = df[hub_col].astype(str)
+        else:
+            df["Hub"] = "Unknown"
+        
+        return df[["Product", "Amount", "BZID", "City", "Hub"]]
     
-    cash_city = prepare_city_df(cash_df)
-    jc_city = prepare_city_df(jc_df)
-    manual_city = prepare_city_df(manual_df)
+    cash_product = prepare_product_df(cash_df, "cash")
+    jc_product = prepare_product_df(jc_df, "jc")
+    manual_product = prepare_product_df(manual_df, "manual")
     
-    all_city = pd.concat([cash_city, jc_city, manual_city], ignore_index=True)
+    all_product = pd.concat([cash_product, jc_product, manual_product], ignore_index=True)
     
-    if all_city.empty:
-        return pd.DataFrame()
+    if all_product.empty:
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
     
-    # Get current month and previous month
-    current_month_data = all_city[all_city["Month"] == current_month]
-    last_month_data = all_city[all_city["Month"] == current_month - 1]
+    # Product summary
+    product_summary = all_product.groupby("Product").agg(
+        Ticket_Count=("Amount", "count"),
+        Total_Amount=("Amount", "sum"),
+        Unique_Customers=("BZID", "nunique")
+    ).reset_index().sort_values("Total_Amount", ascending=False).head(20)
     
-    # Aggregate by city
-    city_summary = all_city.groupby("City").agg(
-        D1_Amount_Refunded=("Amount", "sum"),
-        Present_Month_Amount=("Amount", lambda x: x[all_city["Month"] == current_month].sum()),
-        Last_Month_Amount=("Amount", lambda x: x[all_city["Month"] == current_month - 1].sum())
-    ).reset_index()
+    # Hub-wise product refunds
+    hub_product = all_product.groupby(["Hub", "Product"]).agg(
+        Ticket_Count=("Amount", "count"),
+        Total_Amount=("Amount", "sum")
+    ).reset_index().sort_values(["Hub", "Total_Amount"], ascending=[True, False])
     
-    city_summary["Difference"] = city_summary["Present_Month_Amount"] - city_summary["Last_Month_Amount"]
+    # City-wise product refunds
+    city_product = all_product.groupby(["City", "Product"]).agg(
+        Ticket_Count=("Amount", "count"),
+        Total_Amount=("Amount", "sum")
+    ).reset_index().sort_values(["City", "Total_Amount"], ascending=[True, False])
     
-    return city_summary
+    return product_summary, hub_product, city_product
 
 @st.cache_data(ttl=300)
-def get_hub_dh_data(cash_df, jc_df, manual_df, year, current_month):
-    """Data 3: Hub, DH Name, Count Of Instances, Total Amount"""
+def get_hub_analysis(cash_df, jc_df, manual_df, year, current_month):
+    """Hub-wise analysis with counts and amounts"""
     
     def prepare_hub_df(df):
         if df.empty:
-            return pd.DataFrame(columns=["Hub", "DH Name", "Amount"])
+            return pd.DataFrame(columns=["Hub", "Amount", "BZID"])
         
         df = df.copy()
         
-        # Find Date column
         date_col = None
         for col in ["Date", "date", "Timestamp", "timestamp"]:
             if col in df.columns:
@@ -377,7 +426,7 @@ def get_hub_dh_data(cash_df, jc_df, manual_df, year, current_month):
                 break
         
         if date_col is None:
-            return pd.DataFrame(columns=["Hub", "DH Name", "Amount"])
+            return pd.DataFrame(columns=["Hub", "Amount", "BZID"])
         
         df["Date"] = pd.to_datetime(df[date_col], errors="coerce")
         df = df[df["Date"].notna()]
@@ -385,9 +434,8 @@ def get_hub_dh_data(cash_df, jc_df, manual_df, year, current_month):
         df = df[df["Date"].dt.month <= current_month]
         
         if df.empty:
-            return pd.DataFrame(columns=["Hub", "DH Name", "Amount"])
+            return pd.DataFrame(columns=["Hub", "Amount", "BZID"])
         
-        # Find Amount column
         amount_col = None
         for col in ["Amount", "amount", "Refund Amount"]:
             if col in df.columns:
@@ -399,9 +447,19 @@ def get_hub_dh_data(cash_df, jc_df, manual_df, year, current_month):
         else:
             df["Amount"] = 0
         
-        # Find Hub column
+        bzid_col = None
+        for col in ["BZID", "Business ID", "BZD", "bzid"]:
+            if col in df.columns:
+                bzid_col = col
+                break
+        
+        if bzid_col:
+            df["BZID"] = df[bzid_col].astype(str).str.strip().str.upper()
+        else:
+            df["BZID"] = "Unknown"
+        
         hub_col = None
-        for col in ["Hub", "hub", "Hub Name", "HubName"]:
+        for col in ["Hub", "hub", "Hub ID", "HUB ID", "Hub Name"]:
             if col in df.columns:
                 hub_col = col
                 break
@@ -411,19 +469,7 @@ def get_hub_dh_data(cash_df, jc_df, manual_df, year, current_month):
         else:
             df["Hub"] = "Unknown"
         
-        # Find DH Name column
-        dh_col = None
-        for col in ["DH NAME", "DH Name", "DH Name_1", "DH Name_2"]:
-            if col in df.columns:
-                dh_col = col
-                break
-        
-        if dh_col:
-            df["DH Name"] = df[dh_col].astype(str)
-        else:
-            df["DH Name"] = "Unknown"
-        
-        return df[["Hub", "DH Name", "Amount"]]
+        return df[["Hub", "Amount", "BZID"]]
     
     cash_hub = prepare_hub_df(cash_df)
     jc_hub = prepare_hub_df(jc_df)
@@ -434,24 +480,24 @@ def get_hub_dh_data(cash_df, jc_df, manual_df, year, current_month):
     if all_hub.empty:
         return pd.DataFrame()
     
-    hub_summary = all_hub.groupby(["Hub", "DH Name"]).agg(
-        Count_Of_Instances=("Amount", "count"),
-        Total_Amount=("Amount", "sum")
-    ).reset_index()
+    hub_summary = all_hub.groupby("Hub").agg(
+        Total_Instances=("Amount", "count"),
+        Total_Amount=("Amount", "sum"),
+        Unique_Customers=("BZID", "nunique")
+    ).reset_index().sort_values("Total_Amount", ascending=False)
     
     return hub_summary
 
 @st.cache_data(ttl=300)
-def get_city_performance(cash_df, jc_df, manual_df, year, current_month):
-    """Data 4: City, Total requests received, Refunded cases, FCR, Total Amount, Total Deliveries"""
+def get_city_analysis(cash_df, jc_df, manual_df, year, current_month):
+    """City-wise analysis with counts and amounts"""
     
-    def prepare_performance_df(df):
+    def prepare_city_df(df):
         if df.empty:
-            return pd.DataFrame(columns=["City", "Date", "Amount"])
+            return pd.DataFrame(columns=["City", "Amount", "BZID"])
         
         df = df.copy()
         
-        # Find Date column
         date_col = None
         for col in ["Date", "date", "Timestamp", "timestamp"]:
             if col in df.columns:
@@ -459,7 +505,7 @@ def get_city_performance(cash_df, jc_df, manual_df, year, current_month):
                 break
         
         if date_col is None:
-            return pd.DataFrame(columns=["City", "Date", "Amount"])
+            return pd.DataFrame(columns=["City", "Amount", "BZID"])
         
         df["Date"] = pd.to_datetime(df[date_col], errors="coerce")
         df = df[df["Date"].notna()]
@@ -467,9 +513,8 @@ def get_city_performance(cash_df, jc_df, manual_df, year, current_month):
         df = df[df["Date"].dt.month <= current_month]
         
         if df.empty:
-            return pd.DataFrame(columns=["City", "Date", "Amount"])
+            return pd.DataFrame(columns=["City", "Amount", "BZID"])
         
-        # Find Amount column
         amount_col = None
         for col in ["Amount", "amount", "Refund Amount"]:
             if col in df.columns:
@@ -481,9 +526,19 @@ def get_city_performance(cash_df, jc_df, manual_df, year, current_month):
         else:
             df["Amount"] = 0
         
-        # Find City column
+        bzid_col = None
+        for col in ["BZID", "Business ID", "BZD", "bzid"]:
+            if col in df.columns:
+                bzid_col = col
+                break
+        
+        if bzid_col:
+            df["BZID"] = df[bzid_col].astype(str).str.strip().str.upper()
+        else:
+            df["BZID"] = "Unknown"
+        
         city_col = None
-        for col in ["City", "city", "Hub", "hub", "City Name", "CityName"]:
+        for col in ["City", "city", "City Name", "CityName"]:
             if col in df.columns:
                 city_col = col
                 break
@@ -493,168 +548,24 @@ def get_city_performance(cash_df, jc_df, manual_df, year, current_month):
         else:
             df["City"] = "Unknown"
         
-        return df[["City", "Amount"]]
+        return df[["City", "Amount", "BZID"]]
     
-    cash_perf = prepare_performance_df(cash_df)
-    jc_perf = prepare_performance_df(jc_df)
-    manual_perf = prepare_performance_df(manual_df)
+    cash_city = prepare_city_df(cash_df)
+    jc_city = prepare_city_df(jc_df)
+    manual_city = prepare_city_df(manual_df)
     
-    all_perf = pd.concat([cash_perf, jc_perf, manual_perf], ignore_index=True)
+    all_city = pd.concat([cash_city, jc_city, manual_city], ignore_index=True)
     
-    if all_perf.empty:
+    if all_city.empty:
         return pd.DataFrame()
     
-    city_perf = all_perf.groupby("City").agg(
-        Total_Requests_Received=("Amount", "count"),
-        Refunded_Cases=("Amount", "count"),
-        Total_Amount=("Amount", "sum")
-    ).reset_index()
+    city_summary = all_city.groupby("City").agg(
+        Total_Instances=("Amount", "count"),
+        Total_Amount=("Amount", "sum"),
+        Unique_Customers=("BZID", "nunique")
+    ).reset_index().sort_values("Total_Amount", ascending=False)
     
-    # Placeholder for FCR and Total Deliveries (since we don't have this data)
-    city_perf["FCR"] = np.random.uniform(85, 95, len(city_perf)).round(2)  # Placeholder
-    city_perf["Total_Deliveries"] = city_perf["Total_Requests_Received"] * 3  # Placeholder
-    
-    return city_perf
-
-@st.cache_data(ttl=300)
-def get_issue_type_data(cash_df, jc_df, manual_df, year, current_month):
-    """Data 5: Issue Type, Ticket Count, Total Amount"""
-    
-    def prepare_issue_df(df):
-        if df.empty:
-            return pd.DataFrame(columns=["Issue Type", "Amount"])
-        
-        df = df.copy()
-        
-        # Find Date column
-        date_col = None
-        for col in ["Date", "date", "Timestamp", "timestamp"]:
-            if col in df.columns:
-                date_col = col
-                break
-        
-        if date_col is None:
-            return pd.DataFrame(columns=["Issue Type", "Amount"])
-        
-        df["Date"] = pd.to_datetime(df[date_col], errors="coerce")
-        df = df[df["Date"].notna()]
-        df = df[df["Date"].dt.year == year]
-        df = df[df["Date"].dt.month <= current_month]
-        
-        if df.empty:
-            return pd.DataFrame(columns=["Issue Type", "Amount"])
-        
-        # Find Amount column
-        amount_col = None
-        for col in ["Amount", "amount", "Refund Amount"]:
-            if col in df.columns:
-                amount_col = col
-                break
-        
-        if amount_col:
-            df["Amount"] = pd.to_numeric(df[amount_col], errors="coerce").fillna(0)
-        else:
-            df["Amount"] = 0
-        
-        # Find Issue Type column
-        issue_col = None
-        for col in ["L2 issue", "L2 Issue", "Issue Type", "Reason", "Action to be taken"]:
-            if col in df.columns:
-                issue_col = col
-                break
-        
-        if issue_col:
-            df["Issue Type"] = df[issue_col].astype(str)
-        else:
-            df["Issue Type"] = "Not Specified"
-        
-        return df[["Issue Type", "Amount"]]
-    
-    cash_issue = prepare_issue_df(cash_df)
-    jc_issue = prepare_issue_df(jc_df)
-    manual_issue = prepare_issue_df(manual_df)
-    
-    all_issue = pd.concat([cash_issue, jc_issue, manual_issue], ignore_index=True)
-    
-    if all_issue.empty:
-        return pd.DataFrame()
-    
-    issue_summary = all_issue.groupby("Issue Type").agg(
-        Ticket_Count=("Amount", "count"),
-        Total_Amount=("Amount", "sum")
-    ).reset_index()
-    
-    return issue_summary
-
-@st.cache_data(ttl=300)
-def get_product_refund_data(cash_df, jc_df, manual_df, year, current_month):
-    """Data 6: Product Title, Ticket Count, Total Amount"""
-    
-    def prepare_product_df(df):
-        if df.empty:
-            return pd.DataFrame(columns=["Product", "Amount"])
-        
-        df = df.copy()
-        
-        # Find Date column
-        date_col = None
-        for col in ["Date", "date", "Timestamp", "timestamp"]:
-            if col in df.columns:
-                date_col = col
-                break
-        
-        if date_col is None:
-            return pd.DataFrame(columns=["Product", "Amount"])
-        
-        df["Date"] = pd.to_datetime(df[date_col], errors="coerce")
-        df = df[df["Date"].notna()]
-        df = df[df["Date"].dt.year == year]
-        df = df[df["Date"].dt.month <= current_month]
-        
-        if df.empty:
-            return pd.DataFrame(columns=["Product", "Amount"])
-        
-        # Find Amount column
-        amount_col = None
-        for col in ["Amount", "amount", "Refund Amount"]:
-            if col in df.columns:
-                amount_col = col
-                break
-        
-        if amount_col:
-            df["Amount"] = pd.to_numeric(df[amount_col], errors="coerce").fillna(0)
-        else:
-            df["Amount"] = 0
-        
-        # Find Product column
-        product_col = None
-        for col in ["Product Name", "Product", "Order Item ID", "Order Item Id"]:
-            if col in df.columns:
-                product_col = col
-                break
-        
-        if product_col:
-            df["Product"] = df[product_col].astype(str)
-        else:
-            df["Product"] = "Unknown"
-        
-        return df[["Product", "Amount"]]
-    
-    cash_product = prepare_product_df(cash_df)
-    jc_product = prepare_product_df(jc_df)
-    manual_product = prepare_product_df(manual_df)
-    
-    all_product = pd.concat([cash_product, jc_product, manual_product], ignore_index=True)
-    
-    if all_product.empty:
-        return pd.DataFrame()
-    
-    product_summary = all_product.groupby("Product").agg(
-        Ticket_Count=("Amount", "count"),
-        Total_Amount=("Amount", "sum")
-    ).reset_index().sort_values("Total_Amount", ascending=False).head(20)
-    
-    return product_summary
+    return city_summary
 
 # ================= OPTIMIZED: GET HIGH RISK CUSTOMERS =================
 @st.cache_data(ttl=300)
@@ -884,7 +795,7 @@ if st.button("🔄 Refresh Data"):
     st.rerun()
 
 # ================= TAB SELECTION =================
-tabs = st.tabs(["🔍 Individual Search", "📊 High Risk Customers", "📈 Monthly Summary", "🏙️ City Analysis", "🏪 Hub/DH Analysis", "📊 City Performance", "📋 Issue Type Analysis", "📦 Product Refunds"])
+tabs = st.tabs(["🔍 Individual Search", "📊 High Risk Customers", "📦 Product Refunds", "🏪 Hub Analysis", "🏙️ City Analysis", "📊 Monthly Summary"])
 
 # ================= TAB 1: Individual Search =================
 with tabs[0]:
@@ -1214,9 +1125,9 @@ with tabs[0]:
             st.markdown(f"## 📋 Refund Details")
             st.markdown(f"### {selected_month_label}")
             
-            tabs = st.tabs(["💳 Cash/UPI", "🏦 Jumbocash", "💵 Manual Cash"])
+            tabs_inner = st.tabs(["💳 Cash/UPI", "🏦 Jumbocash", "💵 Manual Cash"])
             
-            with tabs[0]:
+            with tabs_inner[0]:
                 if not cash_current_matches.empty:
                     st.dataframe(
                         cash_current_matches.reset_index(drop=True),
@@ -1226,7 +1137,7 @@ with tabs[0]:
                 else:
                     st.info("No Cash/UPI refunds for this month")
             
-            with tabs[1]:
+            with tabs_inner[1]:
                 if not jc_current_matches.empty:
                     st.dataframe(
                         jc_current_matches.reset_index(drop=True),
@@ -1236,7 +1147,7 @@ with tabs[0]:
                 else:
                     st.info("No Jumbocash refunds for this month")
             
-            with tabs[2]:
+            with tabs_inner[2]:
                 if not manual_current_matches.empty:
                     st.dataframe(
                         manual_current_matches.reset_index(drop=True),
@@ -1326,7 +1237,6 @@ with tabs[0]:
 with tabs[1]:
     st.markdown("## 🚨 High Risk Customers - 10X Approach")
     
-    # Add explanation box with updated criteria
     st.markdown("""
     <div class="info-box">
         <b>📖 Defaulter Detection & Risk Assessment:</b><br><br>
@@ -1336,12 +1246,10 @@ with tabs[1]:
         <b>Why this approach identifies defaulters:</b><br>
         • <b>Consistent Defaulter</b> (4+ refunds every month) = 🔴🔴 EXTREME<br>
         • <b>Policy Breacher</b> (5+ refunds in any month) = 🔴🔴 EXTREME<br>
-        • <b>Frequent User</b> (Refunds in 4+ months) = 🟡 POTENTIAL<br>
-        • BZID-1304447852 with 4 refunds every month = 🔴🔴 EXTREME ✅
+        • <b>Frequent User</b> (Refunds in 4+ months) = 🟡 POTENTIAL
     </div>
     """, unsafe_allow_html=True)
     
-    # Load data once and cache it
     @st.cache_data(ttl=300)
     def load_all_data():
         with st.spinner("Loading data from Google Sheets..."):
@@ -1362,31 +1270,20 @@ with tabs[1]:
             
             return cash_df, jc_df, manual_df
     
-    # Initialize session state
     if 'high_risk_data' not in st.session_state:
         st.session_state.high_risk_data = None
     
     if st.button("🔄 Load High Risk Customers"):
-        # Load all data with caching
         cash_df, jc_df, manual_df = load_all_data()
-        
-        # Get high risk customers using optimized function
         with st.spinner("Analyzing customer data..."):
             high_risk_df = get_high_risk_customers_optimized(
-                cash_df, 
-                jc_df, 
-                manual_df, 
-                current_year, 
-                current_month
+                cash_df, jc_df, manual_df, current_year, current_month
             )
-            
             st.session_state.high_risk_data = high_risk_df
     
-    # Display high risk data from session state
     if st.session_state.high_risk_data is not None and not st.session_state.high_risk_data.empty:
         high_risk_df = st.session_state.high_risk_data
         
-        # Sort by risk level
         risk_order = {"🔴🔴 EXTREME": 0, "🔴 HIGH": 1, "🟡 POTENTIAL": 2}
         high_risk_df["Risk_Order"] = high_risk_df["Risk Level"].map(risk_order)
         high_risk_df = high_risk_df.sort_values(["Risk_Order", "Total Amount"], ascending=[True, False])
@@ -1394,7 +1291,6 @@ with tabs[1]:
         
         st.success(f"Found {len(high_risk_df)} high-risk customers")
         
-        # Display metrics
         col1, col2, col3, col4, col5 = st.columns(5)
         with col1:
             st.metric("Total High Risk", len(high_risk_df))
@@ -1410,11 +1306,9 @@ with tabs[1]:
         with col5:
             st.metric("Total Amount", f"₹{high_risk_df['Total Amount'].sum():,.2f}")
         
-        # Get month columns
         month_abbr = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", 
                       "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][:current_month]
         
-        # Column config
         column_config = {
             "BZID": st.column_config.TextColumn("BZID"),
             "Risk Level": st.column_config.TextColumn("Risk Level"),
@@ -1432,13 +1326,8 @@ with tabs[1]:
         for month in month_abbr:
             column_config[month] = st.column_config.TextColumn(month)
         
-        # Display dataframe with styling
-        st.markdown("### 📊 Customer Monthly Refund Breakdown")
-        
-        # Apply styling
         def highlight_risk(row):
             risk = row.get('Risk Level', '')
-            
             if 'EXTREME' in risk:
                 return ['background-color: #dc3545; color: white; font-weight: bold;'] * len(row)
             elif 'HIGH' in risk:
@@ -1456,7 +1345,6 @@ with tabs[1]:
             column_config=column_config
         )
         
-        # Download button
         csv = high_risk_df.to_csv(index=False)
         st.download_button(
             label="📥 Download Report",
@@ -1468,10 +1356,211 @@ with tabs[1]:
     elif st.session_state.high_risk_data is not None and st.session_state.high_risk_data.empty:
         st.info("✅ No high-risk customers found!")
 
-# ================= TAB 3: Monthly Summary =================
+# ================= TAB 3: Product Refunds =================
 with tabs[2]:
+    st.markdown("## 📦 Product Refund Analysis")
+    st.markdown("*Product-wise refund ticket count, amounts, and hub/city breakdown*")
+    
+    @st.cache_data(ttl=300)
+    def load_product_data():
+        with st.spinner("Loading data..."):
+            cash_df = load_sheet(
+                st.secrets["cash_upi_sheet_id"],
+                "Form Responses 1"
+            )
+            jc_df = load_sheet(
+                st.secrets["jumbocash_sheet_id"],
+                "Form Responses 1"
+            )
+            manual_df = load_sheet(
+                st.secrets["cash_upi_sheet_id"],
+                "cash refund"
+            )
+            return cash_df, jc_df, manual_df
+    
+    if st.button("🔄 Load Product Analysis"):
+        cash_df, jc_df, manual_df = load_product_data()
+        product_summary, hub_product, city_product = get_product_refund_data(
+            cash_df, jc_df, manual_df, current_year, current_month
+        )
+        st.session_state.product_summary = product_summary
+        st.session_state.hub_product = hub_product
+        st.session_state.city_product = city_product
+    
+    if 'product_summary' in st.session_state and not st.session_state.product_summary.empty:
+        # Top Products
+        st.markdown("### 🏆 Top Products by Refund Amount")
+        st.dataframe(
+            st.session_state.product_summary,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Product": st.column_config.TextColumn("Product Name"),
+                "Ticket_Count": st.column_config.NumberColumn("Ticket Count", format="%d"),
+                "Total_Amount": st.column_config.NumberColumn("Total Amount (₹)", format="₹%.2f"),
+                "Unique_Customers": st.column_config.NumberColumn("Unique Customers", format="%d")
+            }
+        )
+        
+        # Hub-wise Product Breakdown
+        st.markdown("### 🏪 Hub-wise Product Refund Breakdown")
+        hub_filter = st.selectbox("Select Hub", ["All"] + sorted(st.session_state.hub_product["Hub"].unique().tolist()))
+        
+        if hub_filter != "All":
+            filtered_hub = st.session_state.hub_product[st.session_state.hub_product["Hub"] == hub_filter]
+        else:
+            filtered_hub = st.session_state.hub_product
+        
+        st.dataframe(
+            filtered_hub,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Hub": st.column_config.TextColumn("Hub"),
+                "Product": st.column_config.TextColumn("Product Name"),
+                "Ticket_Count": st.column_config.NumberColumn("Ticket Count", format="%d"),
+                "Total_Amount": st.column_config.NumberColumn("Total Amount (₹)", format="₹%.2f")
+            }
+        )
+        
+        # City-wise Product Breakdown
+        st.markdown("### 🏙️ City-wise Product Refund Breakdown")
+        city_filter = st.selectbox("Select City", ["All"] + sorted(st.session_state.city_product["City"].unique().tolist()))
+        
+        if city_filter != "All":
+            filtered_city = st.session_state.city_product[st.session_state.city_product["City"] == city_filter]
+        else:
+            filtered_city = st.session_state.city_product
+        
+        st.dataframe(
+            filtered_city,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "City": st.column_config.TextColumn("City"),
+                "Product": st.column_config.TextColumn("Product Name"),
+                "Ticket_Count": st.column_config.NumberColumn("Ticket Count", format="%d"),
+                "Total_Amount": st.column_config.NumberColumn("Total Amount (₹)", format="₹%.2f")
+            }
+        )
+        
+    elif 'product_summary' in st.session_state:
+        st.info("Click 'Load Product Analysis' to view data")
+
+# ================= TAB 4: Hub Analysis =================
+with tabs[3]:
+    st.markdown("## 🏪 Hub Analysis")
+    st.markdown("*Hub-wise refund instances, amounts, and unique customers*")
+    
+    @st.cache_data(ttl=300)
+    def load_hub_data():
+        with st.spinner("Loading data..."):
+            cash_df = load_sheet(
+                st.secrets["cash_upi_sheet_id"],
+                "Form Responses 1"
+            )
+            jc_df = load_sheet(
+                st.secrets["jumbocash_sheet_id"],
+                "Form Responses 1"
+            )
+            manual_df = load_sheet(
+                st.secrets["cash_upi_sheet_id"],
+                "cash refund"
+            )
+            return cash_df, jc_df, manual_df
+    
+    if st.button("🔄 Load Hub Analysis"):
+        cash_df, jc_df, manual_df = load_hub_data()
+        hub_data = get_hub_analysis(cash_df, jc_df, manual_df, current_year, current_month)
+        st.session_state.hub_data = hub_data
+    
+    if 'hub_data' in st.session_state and not st.session_state.hub_data.empty:
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Total Hubs", st.session_state.hub_data["Hub"].nunique())
+        with col2:
+            st.metric("Total Instances", st.session_state.hub_data["Total_Instances"].sum())
+        with col3:
+            st.metric("Total Amount", f"₹{st.session_state.hub_data['Total_Amount'].sum():,.2f}")
+        
+        st.dataframe(
+            st.session_state.hub_data,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Hub": st.column_config.TextColumn("Hub"),
+                "Total_Instances": st.column_config.NumberColumn("Total Instances", format="%d"),
+                "Total_Amount": st.column_config.NumberColumn("Total Amount (₹)", format="₹%.2f"),
+                "Unique_Customers": st.column_config.NumberColumn("Unique Customers", format="%d")
+            }
+        )
+        
+        # Top Hubs chart
+        st.markdown("### 🔝 Top Hubs by Refund Amount")
+        st.bar_chart(st.session_state.hub_data.set_index("Hub")["Total_Amount"].head(10))
+        
+    elif 'hub_data' in st.session_state:
+        st.info("Click 'Load Hub Analysis' to view data")
+
+# ================= TAB 5: City Analysis =================
+with tabs[4]:
+    st.markdown("## 🏙️ City Analysis")
+    st.markdown("*City-wise refund instances, amounts, and unique customers*")
+    
+    @st.cache_data(ttl=300)
+    def load_city_data():
+        with st.spinner("Loading data..."):
+            cash_df = load_sheet(
+                st.secrets["cash_upi_sheet_id"],
+                "Form Responses 1"
+            )
+            jc_df = load_sheet(
+                st.secrets["jumbocash_sheet_id"],
+                "Form Responses 1"
+            )
+            manual_df = load_sheet(
+                st.secrets["cash_upi_sheet_id"],
+                "cash refund"
+            )
+            return cash_df, jc_df, manual_df
+    
+    if st.button("🔄 Load City Analysis"):
+        cash_df, jc_df, manual_df = load_city_data()
+        city_data = get_city_analysis(cash_df, jc_df, manual_df, current_year, current_month)
+        st.session_state.city_data = city_data
+    
+    if 'city_data' in st.session_state and not st.session_state.city_data.empty:
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Total Cities", st.session_state.city_data["City"].nunique())
+        with col2:
+            st.metric("Total Instances", st.session_state.city_data["Total_Instances"].sum())
+        with col3:
+            st.metric("Total Amount", f"₹{st.session_state.city_data['Total_Amount'].sum():,.2f}")
+        
+        st.dataframe(
+            st.session_state.city_data,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "City": st.column_config.TextColumn("City"),
+                "Total_Instances": st.column_config.NumberColumn("Total Instances", format="%d"),
+                "Total_Amount": st.column_config.NumberColumn("Total Amount (₹)", format="₹%.2f"),
+                "Unique_Customers": st.column_config.NumberColumn("Unique Customers", format="%d")
+            }
+        )
+        
+        # Top Cities chart
+        st.markdown("### 🔝 Top Cities by Refund Amount")
+        st.bar_chart(st.session_state.city_data.set_index("City")["Total_Amount"].head(10))
+        
+    elif 'city_data' in st.session_state:
+        st.info("Click 'Load City Analysis' to view data")
+
+# ================= TAB 6: Monthly Summary =================
+with tabs[5]:
     st.markdown("## 📊 Monthly Summary")
-    st.markdown("*Month-wise total requests, refunded cases, and amounts*")
+    st.markdown("*Month-wise refund cases and amounts*")
     
     @st.cache_data(ttl=300)
     def load_monthly_data():
@@ -1502,294 +1591,17 @@ with tabs[2]:
             hide_index=True,
             column_config={
                 "Month": st.column_config.TextColumn("Month"),
-                "Total_Requests_Received": st.column_config.NumberColumn("Total Requests Received", format="%d"),
-                "Refunded_Cases": st.column_config.NumberColumn("Refunded Cases", format="%d"),
-                "Total_Amount": st.column_config.NumberColumn("Total Amount (₹)", format="₹%.2f")
-            }
-        )
-        
-        # Bar chart
-        st.bar_chart(st.session_state.monthly_data.set_index("Month")[["Refunded_Cases", "Total_Requests_Received"]])
-    elif 'monthly_data' in st.session_state:
-        st.info("Click 'Load Monthly Summary' to view data")
-
-# ================= TAB 4: City Analysis =================
-with tabs[3]:
-    st.markdown("## 🏙️ City-wise Refund Analysis")
-    st.markdown("*D-1 Amount, Present Month, Last Month, and Difference*")
-    
-    @st.cache_data(ttl=300)
-    def load_city_data():
-        with st.spinner("Loading data..."):
-            cash_df = load_sheet(
-                st.secrets["cash_upi_sheet_id"],
-                "Form Responses 1"
-            )
-            jc_df = load_sheet(
-                st.secrets["jumbocash_sheet_id"],
-                "Form Responses 1"
-            )
-            manual_df = load_sheet(
-                st.secrets["cash_upi_sheet_id"],
-                "cash refund"
-            )
-            return cash_df, jc_df, manual_df
-    
-    if st.button("🔄 Load City Analysis"):
-        cash_df, jc_df, manual_df = load_city_data()
-        city_data = get_city_wise_data(cash_df, jc_df, manual_df, current_year, current_month)
-        st.session_state.city_data = city_data
-    
-    if 'city_data' in st.session_state and not st.session_state.city_data.empty:
-        st.dataframe(
-            st.session_state.city_data,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "City": st.column_config.TextColumn("City"),
-                "D1_Amount_Refunded": st.column_config.NumberColumn("D-1 Amount Refunded (₹)", format="₹%.2f"),
-                "Present_Month_Amount": st.column_config.NumberColumn("Present Month Amount (₹)", format="₹%.2f"),
-                "Last_Month_Amount": st.column_config.NumberColumn("Last Month Amount (₹)", format="₹%.2f"),
-                "Difference": st.column_config.NumberColumn("Difference (₹)", format="₹%.2f")
-            }
-        )
-        
-        # Highlight cities with negative difference
-        negative_cities = st.session_state.city_data[st.session_state.city_data["Difference"] < 0]
-        if not negative_cities.empty:
-            st.warning(f"⚠️ {len(negative_cities)} cities showing negative difference compared to last month")
-    elif 'city_data' in st.session_state:
-        st.info("Click 'Load City Analysis' to view data")
-
-# ================= TAB 5: Hub/DH Analysis =================
-with tabs[4]:
-    st.markdown("## 🏪 Hub & DH Wise Analysis")
-    st.markdown("*Hub, DH Name, Count of Instances, and Total Amount*")
-    
-    @st.cache_data(ttl=300)
-    def load_hub_data():
-        with st.spinner("Loading data..."):
-            cash_df = load_sheet(
-                st.secrets["cash_upi_sheet_id"],
-                "Form Responses 1"
-            )
-            jc_df = load_sheet(
-                st.secrets["jumbocash_sheet_id"],
-                "Form Responses 1"
-            )
-            manual_df = load_sheet(
-                st.secrets["cash_upi_sheet_id"],
-                "cash refund"
-            )
-            return cash_df, jc_df, manual_df
-    
-    if st.button("🔄 Load Hub/DH Analysis"):
-        cash_df, jc_df, manual_df = load_hub_data()
-        hub_data = get_hub_dh_data(cash_df, jc_df, manual_df, current_year, current_month)
-        st.session_state.hub_data = hub_data
-    
-    if 'hub_data' in st.session_state and not st.session_state.hub_data.empty:
-        # Summary metrics
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Total Hubs/DH", st.session_state.hub_data["Hub"].nunique())
-        with col2:
-            st.metric("Total Instances", st.session_state.hub_data["Count_Of_Instances"].sum())
-        with col3:
-            st.metric("Total Amount", f"₹{st.session_state.hub_data['Total_Amount'].sum():,.2f}")
-        
-        st.dataframe(
-            st.session_state.hub_data,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "Hub": st.column_config.TextColumn("Hub"),
-                "DH Name": st.column_config.TextColumn("DH Name"),
-                "Count_Of_Instances": st.column_config.NumberColumn("Count of Instances", format="%d"),
-                "Total_Amount": st.column_config.NumberColumn("Total Amount (₹)", format="₹%.2f")
-            }
-        )
-        
-        # Sort by count and show top hubs
-        top_hubs = st.session_state.hub_data.groupby("Hub").agg(
-            Total_Instances=("Count_Of_Instances", "sum"),
-            Total_Amount=("Total_Amount", "sum")
-        ).reset_index().sort_values("Total_Instances", ascending=False).head(10)
-        
-        st.markdown("### 🔝 Top Hubs by Refund Instances")
-        st.dataframe(
-            top_hubs,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "Hub": st.column_config.TextColumn("Hub"),
-                "Total_Instances": st.column_config.NumberColumn("Total Instances", format="%d"),
-                "Total_Amount": st.column_config.NumberColumn("Total Amount (₹)", format="₹%.2f")
-            }
-        )
-    elif 'hub_data' in st.session_state:
-        st.info("Click 'Load Hub/DH Analysis' to view data")
-
-# ================= TAB 6: City Performance =================
-with tabs[5]:
-    st.markdown("## 📊 City Performance Dashboard")
-    st.markdown("*City-wise requests, refunds, FCR, and delivery metrics*")
-    
-    @st.cache_data(ttl=300)
-    def load_performance_data():
-        with st.spinner("Loading data..."):
-            cash_df = load_sheet(
-                st.secrets["cash_upi_sheet_id"],
-                "Form Responses 1"
-            )
-            jc_df = load_sheet(
-                st.secrets["jumbocash_sheet_id"],
-                "Form Responses 1"
-            )
-            manual_df = load_sheet(
-                st.secrets["cash_upi_sheet_id"],
-                "cash refund"
-            )
-            return cash_df, jc_df, manual_df
-    
-    if st.button("🔄 Load Performance Data"):
-        cash_df, jc_df, manual_df = load_performance_data()
-        perf_data = get_city_performance(cash_df, jc_df, manual_df, current_year, current_month)
-        st.session_state.perf_data = perf_data
-    
-    if 'perf_data' in st.session_state and not st.session_state.perf_data.empty:
-        # Summary metrics
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.metric("Total Cities", st.session_state.perf_data["City"].nunique())
-        with col2:
-            st.metric("Total Requests", st.session_state.perf_data["Total_Requests_Received"].sum())
-        with col3:
-            st.metric("Total Refunds", st.session_state.perf_data["Refunded_Cases"].sum())
-        with col4:
-            st.metric("Total Amount", f"₹{st.session_state.perf_data['Total_Amount'].sum():,.2f}")
-        
-        st.dataframe(
-            st.session_state.perf_data,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "City": st.column_config.TextColumn("City"),
                 "Total_Requests_Received": st.column_config.NumberColumn("Total Requests", format="%d"),
                 "Refunded_Cases": st.column_config.NumberColumn("Refunded Cases", format="%d"),
-                "FCR": st.column_config.NumberColumn("FCR %", format="%.2f%%"),
-                "Total_Amount": st.column_config.NumberColumn("Total Amount (₹)", format="₹%.2f"),
-                "Total_Deliveries": st.column_config.NumberColumn("Total Deliveries", format="%d")
-            }
-        )
-    elif 'perf_data' in st.session_state:
-        st.info("Click 'Load Performance Data' to view data")
-
-# ================= TAB 7: Issue Type Analysis =================
-with tabs[6]:
-    st.markdown("## 📋 Issue Type Analysis")
-    st.markdown("*Breakdown of refunds by issue type*")
-    
-    @st.cache_data(ttl=300)
-    def load_issue_data():
-        with st.spinner("Loading data..."):
-            cash_df = load_sheet(
-                st.secrets["cash_upi_sheet_id"],
-                "Form Responses 1"
-            )
-            jc_df = load_sheet(
-                st.secrets["jumbocash_sheet_id"],
-                "Form Responses 1"
-            )
-            manual_df = load_sheet(
-                st.secrets["cash_upi_sheet_id"],
-                "cash refund"
-            )
-            return cash_df, jc_df, manual_df
-    
-    if st.button("🔄 Load Issue Analysis"):
-        cash_df, jc_df, manual_df = load_issue_data()
-        issue_data = get_issue_type_data(cash_df, jc_df, manual_df, current_year, current_month)
-        st.session_state.issue_data = issue_data
-    
-    if 'issue_data' in st.session_state and not st.session_state.issue_data.empty:
-        # Summary metrics
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric("Total Issue Types", st.session_state.issue_data["Issue Type"].nunique())
-        with col2:
-            st.metric("Total Tickets", st.session_state.issue_data["Ticket_Count"].sum())
-        
-        st.dataframe(
-            st.session_state.issue_data,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "Issue Type": st.column_config.TextColumn("Issue Type"),
-                "Ticket_Count": st.column_config.NumberColumn("Ticket Count", format="%d"),
                 "Total_Amount": st.column_config.NumberColumn("Total Amount (₹)", format="₹%.2f")
             }
         )
         
-        # Pie chart - show top issues
-        top_issues = st.session_state.issue_data.head(10)
-        if not top_issues.empty:
-            st.markdown("### 🔝 Top Issue Types")
-            st.bar_chart(top_issues.set_index("Issue Type")["Ticket_Count"])
-    elif 'issue_data' in st.session_state:
-        st.info("Click 'Load Issue Analysis' to view data")
-
-# ================= TAB 8: Product Refunds =================
-with tabs[7]:
-    st.markdown("## 📦 Product Refund Analysis")
-    st.markdown("*Product-wise refund ticket count and amounts*")
-    
-    @st.cache_data(ttl=300)
-    def load_product_data():
-        with st.spinner("Loading data..."):
-            cash_df = load_sheet(
-                st.secrets["cash_upi_sheet_id"],
-                "Form Responses 1"
-            )
-            jc_df = load_sheet(
-                st.secrets["jumbocash_sheet_id"],
-                "Form Responses 1"
-            )
-            manual_df = load_sheet(
-                st.secrets["cash_upi_sheet_id"],
-                "cash refund"
-            )
-            return cash_df, jc_df, manual_df
-    
-    if st.button("🔄 Load Product Analysis"):
-        cash_df, jc_df, manual_df = load_product_data()
-        product_data = get_product_refund_data(cash_df, jc_df, manual_df, current_year, current_month)
-        st.session_state.product_data = product_data
-    
-    if 'product_data' in st.session_state and not st.session_state.product_data.empty:
-        # Summary metrics
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric("Total Products", st.session_state.product_data["Product"].nunique())
-        with col2:
-            st.metric("Total Tickets", st.session_state.product_data["Ticket_Count"].sum())
+        st.markdown("### 📈 Monthly Refund Trends")
+        st.bar_chart(st.session_state.monthly_data.set_index("Month")["Total_Amount"])
         
-        st.dataframe(
-            st.session_state.product_data,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "Product": st.column_config.TextColumn("Product Title"),
-                "Ticket_Count": st.column_config.NumberColumn("Ticket Count", format="%d"),
-                "Total_Amount": st.column_config.NumberColumn("Total Amount (₹)", format="₹%.2f")
-            }
-        )
-        
-        # Show top products
-        st.markdown("### 🔝 Top Products by Refund Amount")
-        st.bar_chart(st.session_state.product_data.set_index("Product")["Total_Amount"].head(10))
-    elif 'product_data' in st.session_state:
-        st.info("Click 'Load Product Analysis' to view data")
+    elif 'monthly_data' in st.session_state:
+        st.info("Click 'Load Monthly Summary' to view data")
 
 # ================= FOOTER =================
 st.markdown("---")
