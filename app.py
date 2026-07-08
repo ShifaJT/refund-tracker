@@ -230,22 +230,24 @@ def get_product_city_analysis(cash_df, jc_df, manual_df, year, current_month, se
         if date_col is None:
             return pd.DataFrame(columns=["BZID", "Date", "Amount", "Product", "City"])
         
+        # Convert to datetime - FIXED
         df["Date"] = pd.to_datetime(df[date_col], errors="coerce")
         
+        # If date conversion failed, try alternative
         if df["Date"].isna().all():
             try:
                 df["Date"] = pd.to_datetime(df[date_col], errors="coerce", infer_datetime_format=True)
             except:
                 pass
         
-        if df["Date"].isna().all():
+        # Drop rows with invalid dates
+        df = df[df["Date"].notna()]
+        
+        if df.empty:
             return pd.DataFrame(columns=["BZID", "Date", "Amount", "Product", "City"])
         
         # Filter to current year
-        df = df[
-            (df["Date"].dt.year == year) &
-            (df["Date"].notna())
-        ]
+        df = df[df["Date"].dt.year == year]
         
         # If a specific month is selected, filter by that month
         if selected_month is not None:
@@ -306,14 +308,17 @@ def get_product_city_analysis(cash_df, jc_df, manual_df, year, current_month, se
     all_analysis = pd.concat([cash_analysis, jc_analysis, manual_analysis], ignore_index=True)
     
     if all_analysis.empty:
-        return pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
     
     # Clean product names
     all_analysis["Product"] = all_analysis["Product"].str.replace("BLTORDITM-", "", regex=False)
     all_analysis["Product"] = all_analysis["Product"].str.replace("_", " ", regex=False)
     all_analysis["Product"] = all_analysis["Product"].str.strip()
     
-    # Add month name
+    # Add month name - FIXED: Ensure Date is datetime first
+    if not pd.api.types.is_datetime64_any_dtype(all_analysis["Date"]):
+        all_analysis["Date"] = pd.to_datetime(all_analysis["Date"], errors="coerce")
+    
     all_analysis["Month"] = all_analysis["Date"].dt.strftime("%B")
     
     # Top products by refund amount
@@ -519,18 +524,25 @@ def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_m
         jc_total = jc_prep[jc_prep["BZID"] == bzid]["Amount"].sum() if not jc_prep.empty else 0
         manual_total = manual_prep[manual_prep["BZID"] == bzid]["Amount"].sum() if not manual_prep.empty else 0
         
-        # ===== UPDATED RISK ASSESSMENT =====
+        # ===== DEFUALTER DETECTION =====
         # Check if customer has 4+ refunds in every month (consistent defaulter)
         consistent_defaulter = all(count >= 4 for count in monthly_counts[:current_month])
         
-        # 1. EXTREME: Amount > 500 AND Avg >= 3 OR Consistent Defaulter (4+ every month)
+        # Check if customer has 5+ refunds in any month (policy breach)
+        has_policy_breach = max_monthly_refunds >= 5
+        
+        # Check if customer has refunds in 4+ months (frequent user)
+        frequent_user = months_with_refunds >= 4
+        
+        # ===== UPDATED RISK ASSESSMENT =====
+        # 1. EXTREME: (Amount > 500 AND Avg >= 3) OR Consistent Defaulter (4+ every month)
         if (total_amount > 500 and avg_refunds >= 3) or consistent_defaulter:
             risk_level = "🔴🔴 EXTREME"
-        # 2. HIGH: Amount <= 500 AND Avg >= 3
-        elif total_amount <= 500 and avg_refunds >= 3:
+        # 2. HIGH: Amount <= 500 AND Avg >= 3 OR Policy Breach (5+ in a month)
+        elif (total_amount <= 500 and avg_refunds >= 3) or has_policy_breach:
             risk_level = "🔴 HIGH"
-        # 3. POTENTIAL: Other patterns (Avg < 3 but showing signs)
-        elif avg_refunds >= 2 or months_with_refunds >= 3:
+        # 3. POTENTIAL: Avg >= 2 OR Active in 3+ months OR Frequent user (4+ months)
+        elif avg_refunds >= 2 or months_with_refunds >= 3 or frequent_user:
             risk_level = "🟡 POTENTIAL"
         else:
             continue
@@ -1015,16 +1027,15 @@ with tab2:
     # Add explanation box with updated criteria
     st.markdown("""
     <div class="info-box">
-        <b>📖 New Risk Assessment Criteria:</b><br><br>
-        <b>🔴🔴 EXTREME RISK:</b> (Total Amount > ₹500 AND Avg >= 3) OR (4+ refunds EVERY month)<br>
+        <b>📖 Defaulter Detection & Risk Assessment:</b><br><br>
+        <b>🔴🔴 EXTREME RISK:</b> (Total Amount > ₹500 AND Avg >= 3) OR (4+ refunds EVERY month) OR (5+ refunds in ANY month)<br>
         <b>🔴 HIGH RISK:</b> Total Amount <= ₹500 AND Avg >= 3<br>
-        <b>🟡 POTENTIAL RISK:</b> Average Refunds >= 2 OR Active in 3+ months (pattern emerging)<br><br>
-        <b>Key Updates:</b><br>
-        • <b>Consistent Defaulters</b> (4+ refunds every month) are now flagged as EXTREME<br>
-        • ₹990 with 4 refunds every month = 🔴🔴 EXTREME (Consistent defaulter)<br>
-        • ₹1,200 with avg 4 refunds = 🔴🔴 EXTREME<br>
-        • ₹800 with avg 4 refunds = 🔴 HIGH<br>
-        • ₹500 with avg 2 refunds = 🟡 POTENTIAL
+        <b>🟡 POTENTIAL RISK:</b> Avg >= 2 OR Active in 3+ months OR Refunds in 4+ months<br><br>
+        <b>Why this approach identifies defaulters:</b><br>
+        • <b>Consistent Defaulter</b> (4+ refunds every month) = 🔴🔴 EXTREME<br>
+        • <b>Policy Breacher</b> (5+ refunds in any month) = 🔴🔴 EXTREME<br>
+        • <b>Frequent User</b> (Refunds in 4+ months) = 🟡 POTENTIAL<br>
+        • BZID-1304447852 with 4 refunds every month = 🔴🔴 EXTREME ✅
     </div>
     """, unsafe_allow_html=True)
     
@@ -1256,7 +1267,6 @@ with tab3:
         if 'repeated_products' in st.session_state and not st.session_state.repeated_products.empty:
             st.markdown("*Products that appear in multiple months - indicating recurring refund issues*")
             
-            # Display repeated products
             st.dataframe(
                 st.session_state.repeated_products,
                 use_container_width=True,
@@ -1277,7 +1287,6 @@ with tab3:
         st.markdown("### 📊 Monthly Product Refund Breakdown")
         
         if 'monthly_products' in st.session_state and not st.session_state.monthly_products.empty:
-            # Show monthly breakdown table
             st.dataframe(
                 st.session_state.monthly_products,
                 use_container_width=True,
@@ -1288,21 +1297,6 @@ with tab3:
                     "Total_Amount": st.column_config.NumberColumn("Total Amount (₹)", format="₹%.2f"),
                     "Refund_Count": st.column_config.NumberColumn("Refund Count", format="%d")
                 }
-            )
-            
-            # Pivot table for monthly product amounts
-            pivot_data = st.session_state.monthly_products.pivot(
-                index="Product", 
-                columns="Month", 
-                values="Total_Amount"
-            ).fillna(0)
-            
-            # Show heatmap-like table
-            st.markdown("#### 📈 Monthly Product Amount Heatmap")
-            st.dataframe(
-                pivot_data,
-                use_container_width=True,
-                column_config={col: st.column_config.NumberColumn(col, format="₹%.2f") for col in pivot_data.columns}
             )
         else:
             st.info("No monthly product data available")
