@@ -104,17 +104,29 @@ def load_sheet(sheet_id, sheet_name):
     try:
         client = get_client()
         sheet = client.open_by_key(sheet_id)
-        ws = sheet.worksheet(sheet_name)
+        
+        # Try to get the worksheet by name
+        try:
+            ws = sheet.worksheet(sheet_name)
+        except gspread.exceptions.WorksheetNotFound:
+            # If worksheet not found, list all available worksheets
+            available_sheets = [ws.title for ws in sheet.worksheets()]
+            st.error(f"❌ Worksheet '{sheet_name}' not found!")
+            st.info(f"📋 Available worksheets in this sheet: {', '.join(available_sheets)}")
+            return pd.DataFrame()
+        
         data = ws.get_all_values()
+        if len(data) <= 1:
+            st.warning(f"⚠️ Worksheet '{sheet_name}' has no data (only headers or empty)")
+            return pd.DataFrame()
+            
         df = pd.DataFrame(data[1:], columns=data[0])
         df.columns = df.columns.str.strip()
         df = fix_duplicate_columns(df)
         return df
     except gspread.exceptions.SpreadsheetNotFound:
-        st.error(f"❌ Spreadsheet not found! Please check:\n1. Sheet ID: {sheet_id}\n2. Service account has access to this sheet")
-        return pd.DataFrame()
-    except gspread.exceptions.WorksheetNotFound:
-        st.error(f"❌ Worksheet '{sheet_name}' not found in the spreadsheet!")
+        st.error(f"❌ Spreadsheet not found! Sheet ID: {sheet_id}")
+        st.info("Please check if the sheet ID is correct and the service account has access.")
         return pd.DataFrame()
     except Exception as e:
         st.error(f"❌ Error loading sheet: {str(e)}")
@@ -758,11 +770,6 @@ with tab2:
     st.markdown("## 🏦 Bank Transfer Refund Details")
     st.markdown("*Search for a bank transfer refund by Ticket ID and view all details including UTR number, status, and transaction information*")
     
-    # Show sheet access status
-    st.info("📌 Sheet ID: `1QgGIeSgCSXSE_8CDosYWcAEF2NkA249Mv_EIafJrIj8`")
-    st.info("📌 Service Account: `refund-tracker-app@refund-tracker-app-492509.iam.gserviceaccount.com`")
-    st.info("📌 Make sure the service account has EDITOR access to the sheet")
-    
     ticket_id_input = st.text_input("Enter Ticket ID")
     
     if st.button("🔍 Search Bank Transfer"):
@@ -773,24 +780,11 @@ with tab2:
         ticket_id = ticket_id_input.strip()
         
         with st.spinner(f"Searching for Ticket ID: {ticket_id}..."):
-            # Load bank transfer data
-            try:
-                bank_df = load_sheet(st.secrets["bank_transfer_sheet_id"], "CD Refund Sheet")
-                if bank_df.empty:
-                    st.error("❌ No data found in the sheet. Please check:\n1. Sheet ID is correct\n2. Service account has access\n3. Sheet contains data")
-                    st.stop()
-            except Exception as e:
-                st.error(f"❌ Error loading bank transfer sheet: {str(e)}")
-                st.info("""
-                **To fix this issue:**
-                1. Open the Google Sheet: https://docs.google.com/spreadsheets/d/1QgGIeSgCSXSE_8CDosYWcAEF2NkA249Mv_EIafJrIj8/edit
-                2. Click the 'Share' button (top right)
-                3. Add this email as Editor:
-                   `refund-tracker-app@refund-tracker-app-492509.iam.gserviceaccount.com`
-                4. Click 'Send'
-                5. Wait 2-3 minutes for permissions to propagate
-                6. Refresh the app
-                """)
+            # Load bank transfer data - using the correct sheet name "CD Refund Sheet"
+            bank_df = load_sheet(st.secrets["bank_transfer_sheet_id"], "CD Refund Sheet")
+            
+            if bank_df.empty:
+                st.warning("⚠️ No data found in the bank transfer sheet. Please check if the sheet has data.")
                 st.stop()
             
             # Search for ticket in bank transfer sheet
@@ -808,6 +802,7 @@ with tab2:
             
             # Show as a nice card
             for _, row in bank_match.iterrows():
+                status_color = "#28a745" if str(row.get('Status', '')).lower() == "success" else "#dc3545"
                 st.markdown(f"""
                 <div style="background-color: #f8f9fa; padding: 20px; border-radius: 10px; margin: 10px 0; border: 1px solid #dee2e6;">
                     <h4>💰 Bank Transfer Information</h4>
@@ -815,7 +810,7 @@ with tab2:
                         <tr><td style="padding: 8px; font-weight: bold; width: 40%;">Ticket ID:</td><td style="padding: 8px;">{row.get('Ticket ID', 'N/A')}</td></tr>
                         <tr><td style="padding: 8px; font-weight: bold;">Amount:</td><td style="padding: 8px; color: #28a745; font-weight: bold;">{row.get('Amount (₹)', 'N/A')}</td></tr>
                         <tr><td style="padding: 8px; font-weight: bold;">UTR Number:</td><td style="padding: 8px; font-family: monospace;">{row.get('UTR Number', 'N/A')}</td></tr>
-                        <tr><td style="padding: 8px; font-weight: bold;">Status:</td><td style="padding: 8px;">{row.get('Status', 'N/A')}</td></tr>
+                        <tr><td style="padding: 8px; font-weight: bold;">Status:</td><td style="padding: 8px; color: {status_color}; font-weight: bold;">{row.get('Status', 'N/A')}</td></tr>
                         <tr><td style="padding: 8px; font-weight: bold;">Date:</td><td style="padding: 8px;">{row.get('Date', 'N/A')}</td></tr>
                         <tr><td style="padding: 8px; font-weight: bold;">Hub:</td><td style="padding: 8px;">{row.get('Hub', 'N/A')}</td></tr>
                         <tr><td style="padding: 8px; font-weight: bold;">City:</td><td style="padding: 8px;">{row.get('City', 'N/A')}</td></tr>
