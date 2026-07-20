@@ -1,4 +1,4 @@
-	import streamlit as st
+import streamlit as st
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
@@ -770,284 +770,271 @@ with tab2:
     st.markdown("## 🏦 Bank Transfer Refund Details")
     st.markdown("*Search for a bank transfer refund by Ticket ID and view all details including UTR number, status, and transaction information*")
     
-    # Check if bank_transfer_sheet_id exists in secrets
-    if "bank_transfer_sheet_id" not in st.secrets:
-        st.error("❌ 'bank_transfer_sheet_id' not found in secrets!")
-        st.info("""
-        **To fix this issue:**
-        1. Go to your Streamlit Cloud app dashboard
-        2. Click on 'Settings' → 'Secrets'
-        3. Add the following line:bank_transfer_sheet_id = "1QgGIeSgCSXSE_8CDosYWcAEF2NkA249Mv_EIafJrIj8"
-
-4. Click 'Save' and the app will automatically redeploy
-""")
-st.stop()
-
-ticket_id_input = st.text_input("Enter Ticket ID")
-
-if st.button("🔍 Search Bank Transfer"):
-if not ticket_id_input:
-    st.warning("Please enter a Ticket ID")
-    st.stop()
-
-ticket_id = ticket_id_input.strip()
-
-with st.spinner(f"Searching for Ticket ID: {ticket_id}..."):
-    # Load bank transfer data - using the correct sheet name "CD Refund Sheet"
-    bank_df = load_sheet(st.secrets["bank_transfer_sheet_id"], "CD Refund Sheet")
+    ticket_id_input = st.text_input("Enter Ticket ID")
     
-    if bank_df.empty:
-        st.warning("⚠️ No data found in the bank transfer sheet. Please check if the sheet has data.")
-        st.stop()
-    
-    # Search for ticket in bank transfer sheet
-    bank_match = get_bank_transfer_data(bank_df, ticket_id)
-
-# Display results
-if bank_match.empty:
-    st.warning(f"No bank transfer records found for Ticket ID: {ticket_id}")
-else:
-    st.success(f"✅ Found {len(bank_match)} bank transfer record(s) for Ticket ID: {ticket_id}")
-    
-    # Display Bank Transfer details as a nice card
-    st.markdown("---")
-    st.markdown("## 📋 Bank Transfer Details")
-    
-    # Show as a nice card
-    for _, row in bank_match.iterrows():
-        status_color = "#28a745" if str(row.get('Status', '')).lower() == "success" else "#dc3545"
-        st.markdown(f"""
-        <div style="background-color: #f8f9fa; padding: 20px; border-radius: 10px; margin: 10px 0; border: 1px solid #dee2e6;">
-            <h4>💰 Bank Transfer Information</h4>
-            <table style="width: 100%; border-collapse: collapse;">
-                <tr><td style="padding: 8px; font-weight: bold; width: 40%;">Ticket ID:</td><td style="padding: 8px;">{row.get('Ticket ID', 'N/A')}</td></tr>
-                <tr><td style="padding: 8px; font-weight: bold;">Amount:</td><td style="padding: 8px; color: #28a745; font-weight: bold;">{row.get('Amount (₹)', 'N/A')}</td></tr>
-                <tr><td style="padding: 8px; font-weight: bold;">UTR Number:</td><td style="padding: 8px; font-family: monospace;">{row.get('UTR Number', 'N/A')}</td></tr>
-                <tr><td style="padding: 8px; font-weight: bold;">Status:</td><td style="padding: 8px; color: {status_color}; font-weight: bold;">{row.get('Status', 'N/A')}</td></tr>
-                <tr><td style="padding: 8px; font-weight: bold;">Date:</td><td style="padding: 8px;">{row.get('Date', 'N/A')}</td></tr>
-                <tr><td style="padding: 8px; font-weight: bold;">Hub:</td><td style="padding: 8px;">{row.get('Hub', 'N/A')}</td></tr>
-                <tr><td style="padding: 8px; font-weight: bold;">City:</td><td style="padding: 8px;">{row.get('City', 'N/A')}</td></tr>
-                <tr><td style="padding: 8px; font-weight: bold;">Reason:</td><td style="padding: 8px;">{row.get('Reason', 'N/A')}</td></tr>
-                <tr><td style="padding: 8px; font-weight: bold;">Phone Number:</td><td style="padding: 8px;">{row.get('Phone Number', 'N/A')}</td></tr>
-            </table>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    # Also show as dataframe
-    st.markdown("### 📊 Data View")
-    st.dataframe(bank_match, use_container_width=True, hide_index=True)
-    
-    # Summary
-    st.markdown("---")
-    st.markdown("## 📊 Summary")
-    
-    total_amount = 0
-    if "Amount (₹)" in bank_match.columns:
-        total_amount = bank_match["Amount (₹)"].str.replace("₹", "").str.replace(",", "").astype(float).sum()
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        st.metric("Total Records", len(bank_match))
-    with col2:
-        st.metric("Total Amount", f"₹{total_amount:,.2f}")
-    
-    # Download button
-    csv = bank_match.to_csv(index=False)
-    st.download_button(
-        "📥 Download Bank Transfer Details",
-        data=csv,
-        file_name=f"bank_transfer_{ticket_id}.csv",
-        mime="text/csv"
-    )
+    if st.button("🔍 Search Bank Transfer"):
+        if not ticket_id_input:
+            st.warning("Please enter a Ticket ID")
+            st.stop()
+        
+        ticket_id = ticket_id_input.strip()
+        
+        with st.spinner(f"Searching for Ticket ID: {ticket_id}..."):
+            # Load bank transfer data - using the correct sheet name "CD Refund Sheet"
+            bank_df = load_sheet(st.secrets["bank_transfer_sheet_id"], "CD Refund Sheet")
+            
+            if bank_df.empty:
+                st.warning("⚠️ No data found in the bank transfer sheet. Please check if the sheet has data.")
+                st.stop()
+            
+            # Search for ticket in bank transfer sheet
+            bank_match = get_bank_transfer_data(bank_df, ticket_id)
+        
+        # Display results
+        if bank_match.empty:
+            st.warning(f"No bank transfer records found for Ticket ID: {ticket_id}")
+        else:
+            st.success(f"✅ Found {len(bank_match)} bank transfer record(s) for Ticket ID: {ticket_id}")
+            
+            # Display Bank Transfer details as a nice card
+            st.markdown("---")
+            st.markdown("## 📋 Bank Transfer Details")
+            
+            # Show as a nice card
+            for _, row in bank_match.iterrows():
+                status_color = "#28a745" if str(row.get('Status', '')).lower() == "success" else "#dc3545"
+                st.markdown(f"""
+                <div style="background-color: #f8f9fa; padding: 20px; border-radius: 10px; margin: 10px 0; border: 1px solid #dee2e6;">
+                    <h4>💰 Bank Transfer Information</h4>
+                    <table style="width: 100%; border-collapse: collapse;">
+                        <tr><td style="padding: 8px; font-weight: bold; width: 40%;">Ticket ID:</td><td style="padding: 8px;">{row.get('Ticket ID', 'N/A')}</td></tr>
+                        <tr><td style="padding: 8px; font-weight: bold;">Amount:</td><td style="padding: 8px; color: #28a745; font-weight: bold;">{row.get('Amount (₹)', 'N/A')}</td></tr>
+                        <tr><td style="padding: 8px; font-weight: bold;">UTR Number:</td><td style="padding: 8px; font-family: monospace;">{row.get('UTR Number', 'N/A')}</td></tr>
+                        <tr><td style="padding: 8px; font-weight: bold;">Status:</td><td style="padding: 8px; color: {status_color}; font-weight: bold;">{row.get('Status', 'N/A')}</td></tr>
+                        <tr><td style="padding: 8px; font-weight: bold;">Date:</td><td style="padding: 8px;">{row.get('Date', 'N/A')}</td></tr>
+                        <tr><td style="padding: 8px; font-weight: bold;">Hub:</td><td style="padding: 8px;">{row.get('Hub', 'N/A')}</td></tr>
+                        <tr><td style="padding: 8px; font-weight: bold;">City:</td><td style="padding: 8px;">{row.get('City', 'N/A')}</td></tr>
+                        <tr><td style="padding: 8px; font-weight: bold;">Reason:</td><td style="padding: 8px;">{row.get('Reason', 'N/A')}</td></tr>
+                        <tr><td style="padding: 8px; font-weight: bold;">Phone Number:</td><td style="padding: 8px;">{row.get('Phone Number', 'N/A')}</td></tr>
+                    </table>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            # Also show as dataframe
+            st.markdown("### 📊 Data View")
+            st.dataframe(bank_match, use_container_width=True, hide_index=True)
+            
+            # Summary
+            st.markdown("---")
+            st.markdown("## 📊 Summary")
+            
+            total_amount = 0
+            if "Amount (₹)" in bank_match.columns:
+                total_amount = bank_match["Amount (₹)"].str.replace("₹", "").str.replace(",", "").astype(float).sum()
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("Total Records", len(bank_match))
+            with col2:
+                st.metric("Total Amount", f"₹{total_amount:,.2f}")
+            
+            # Download button
+            csv = bank_match.to_csv(index=False)
+            st.download_button(
+                "📥 Download Bank Transfer Details",
+                data=csv,
+                file_name=f"bank_transfer_{ticket_id}.csv",
+                mime="text/csv"
+            )
 
 # ================= TAB 3: High Risk Customers =================
 with tab3:
-st.markdown("## 🚨 High Risk Customers")
-
-st.markdown("""
-<div class="info-box">
-<b>📖 Risk Assessment:</b><br>
-🔴🔴 EXTREME: (Amount > ₹500 AND Avg >= 3) OR (4+ refunds EVERY month) OR (5+ refunds in ANY month)<br>
-🔴 HIGH: Amount <= ₹500 AND Avg >= 3<br>
-🟡 POTENTIAL: Avg >= 2 OR Active in 3+ months OR Refunds in 4+ months
-</div>
-""", unsafe_allow_html=True)
-
-@st.cache_data(ttl=300)
-def load_all_data():
-cash_df = load_sheet(st.secrets["cash_upi_sheet_id"], "Form Responses 1")
-jc_df = load_sheet(st.secrets["jumbocash_sheet_id"], "Form Responses 1")
-manual_df = load_sheet(st.secrets["cash_upi_sheet_id"], "cash refund")
-return cash_df, jc_df, manual_df
-
-if 'high_risk_data' not in st.session_state:
-st.session_state.high_risk_data = None
-
-if st.button("🔄 Load High Risk Customers"):
-cash_df, jc_df, manual_df = load_all_data()
-with st.spinner("Analyzing customer data..."):
-    high_risk_df = get_high_risk_customers_optimized(cash_df, jc_df, manual_df, current_year, current_month)
-    st.session_state.high_risk_data = high_risk_df
-
-if st.session_state.high_risk_data is not None and not st.session_state.high_risk_data.empty:
-high_risk_df = st.session_state.high_risk_data
-risk_order = {"🔴🔴 EXTREME": 0, "🔴 HIGH": 1, "🟡 POTENTIAL": 2}
-high_risk_df["Risk_Order"] = high_risk_df["Risk Level"].map(risk_order)
-high_risk_df = high_risk_df.sort_values(["Risk_Order", "Total Amount"], ascending=[True, False])
-high_risk_df = high_risk_df.drop(columns=["Risk_Order"])
-
-st.success(f"Found {len(high_risk_df)} high-risk customers")
-
-col1, col2, col3, col4, col5 = st.columns(5)
-with col1:
-    st.metric("Total High Risk", len(high_risk_df))
-with col2:
-    st.metric("🔴🔴 Extreme", len(high_risk_df[high_risk_df["Risk Level"] == "🔴🔴 EXTREME"]))
-with col3:
-    st.metric("🔴 High", len(high_risk_df[high_risk_df["Risk Level"] == "🔴 HIGH"]))
-with col4:
-    st.metric("🟡 Potential", len(high_risk_df[high_risk_df["Risk Level"] == "🟡 POTENTIAL"]))
-with col5:
-    st.metric("Total Amount", f"₹{high_risk_df['Total Amount'].sum():,.2f}")
-
-month_abbr = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][:current_month]
-
-column_config = {
-    "BZID": st.column_config.TextColumn("BZID"),
-    "Risk Level": st.column_config.TextColumn("Risk Level"),
-    "Status": st.column_config.TextColumn("Status"),
-    "Total Refunds": st.column_config.NumberColumn("Total Refunds", format="%d"),
-    "Monthly Average": st.column_config.NumberColumn("Avg/Month", format="%.2f"),
-    "Months Active": st.column_config.NumberColumn("Months Active", format="%d"),
-    "Max Monthly Refunds": st.column_config.NumberColumn("Max/Month", format="%d"),
-    "Total Amount": st.column_config.NumberColumn("Total Amount (₹)", format="₹%.2f"),
-    "Cash_UPI": st.column_config.NumberColumn("Cash/UPI (₹)", format="₹%.2f"),
-    "Jumbocash": st.column_config.NumberColumn("Jumbocash (₹)", format="₹%.2f"),
-    "Manual_Cash": st.column_config.NumberColumn("Manual Cash (₹)", format="₹%.2f"),
-}
-for month in month_abbr:
-    column_config[month] = st.column_config.TextColumn(month)
-
-def highlight_risk(row):
-    risk = row.get('Risk Level', '')
-    if 'EXTREME' in risk:
-        return ['background-color: #dc3545; color: white; font-weight: bold;'] * len(row)
-    elif 'HIGH' in risk:
-        return ['background-color: #f8d7da; font-weight: bold;'] * len(row)
-    elif 'POTENTIAL' in risk:
-        return ['background-color: #fff3cd;'] * len(row)
-    return [''] * len(row)
-
-st.dataframe(
-    high_risk_df.style.apply(highlight_risk, axis=1),
-    use_container_width=True,
-    hide_index=True,
-    column_config=column_config
-)
-
-csv = high_risk_df.to_csv(index=False)
-st.download_button("📥 Download Report", data=csv, file_name=f"high_risk_customers_{current_year}.csv", mime="text/csv")
-
-elif st.session_state.high_risk_data is not None:
-st.info("✅ No high-risk customers found!")
+    st.markdown("## 🚨 High Risk Customers")
+    
+    st.markdown("""
+    <div class="info-box">
+        <b>📖 Risk Assessment:</b><br>
+        🔴🔴 EXTREME: (Amount > ₹500 AND Avg >= 3) OR (4+ refunds EVERY month) OR (5+ refunds in ANY month)<br>
+        🔴 HIGH: Amount <= ₹500 AND Avg >= 3<br>
+        🟡 POTENTIAL: Avg >= 2 OR Active in 3+ months OR Refunds in 4+ months
+    </div>
+    """, unsafe_allow_html=True)
+    
+    @st.cache_data(ttl=300)
+    def load_all_data():
+        cash_df = load_sheet(st.secrets["cash_upi_sheet_id"], "Form Responses 1")
+        jc_df = load_sheet(st.secrets["jumbocash_sheet_id"], "Form Responses 1")
+        manual_df = load_sheet(st.secrets["cash_upi_sheet_id"], "cash refund")
+        return cash_df, jc_df, manual_df
+    
+    if 'high_risk_data' not in st.session_state:
+        st.session_state.high_risk_data = None
+    
+    if st.button("🔄 Load High Risk Customers"):
+        cash_df, jc_df, manual_df = load_all_data()
+        with st.spinner("Analyzing customer data..."):
+            high_risk_df = get_high_risk_customers_optimized(cash_df, jc_df, manual_df, current_year, current_month)
+            st.session_state.high_risk_data = high_risk_df
+    
+    if st.session_state.high_risk_data is not None and not st.session_state.high_risk_data.empty:
+        high_risk_df = st.session_state.high_risk_data
+        risk_order = {"🔴🔴 EXTREME": 0, "🔴 HIGH": 1, "🟡 POTENTIAL": 2}
+        high_risk_df["Risk_Order"] = high_risk_df["Risk Level"].map(risk_order)
+        high_risk_df = high_risk_df.sort_values(["Risk_Order", "Total Amount"], ascending=[True, False])
+        high_risk_df = high_risk_df.drop(columns=["Risk_Order"])
+        
+        st.success(f"Found {len(high_risk_df)} high-risk customers")
+        
+        col1, col2, col3, col4, col5 = st.columns(5)
+        with col1:
+            st.metric("Total High Risk", len(high_risk_df))
+        with col2:
+            st.metric("🔴🔴 Extreme", len(high_risk_df[high_risk_df["Risk Level"] == "🔴🔴 EXTREME"]))
+        with col3:
+            st.metric("🔴 High", len(high_risk_df[high_risk_df["Risk Level"] == "🔴 HIGH"]))
+        with col4:
+            st.metric("🟡 Potential", len(high_risk_df[high_risk_df["Risk Level"] == "🟡 POTENTIAL"]))
+        with col5:
+            st.metric("Total Amount", f"₹{high_risk_df['Total Amount'].sum():,.2f}")
+        
+        month_abbr = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][:current_month]
+        
+        column_config = {
+            "BZID": st.column_config.TextColumn("BZID"),
+            "Risk Level": st.column_config.TextColumn("Risk Level"),
+            "Status": st.column_config.TextColumn("Status"),
+            "Total Refunds": st.column_config.NumberColumn("Total Refunds", format="%d"),
+            "Monthly Average": st.column_config.NumberColumn("Avg/Month", format="%.2f"),
+            "Months Active": st.column_config.NumberColumn("Months Active", format="%d"),
+            "Max Monthly Refunds": st.column_config.NumberColumn("Max/Month", format="%d"),
+            "Total Amount": st.column_config.NumberColumn("Total Amount (₹)", format="₹%.2f"),
+            "Cash_UPI": st.column_config.NumberColumn("Cash/UPI (₹)", format="₹%.2f"),
+            "Jumbocash": st.column_config.NumberColumn("Jumbocash (₹)", format="₹%.2f"),
+            "Manual_Cash": st.column_config.NumberColumn("Manual Cash (₹)", format="₹%.2f"),
+        }
+        for month in month_abbr:
+            column_config[month] = st.column_config.TextColumn(month)
+        
+        def highlight_risk(row):
+            risk = row.get('Risk Level', '')
+            if 'EXTREME' in risk:
+                return ['background-color: #dc3545; color: white; font-weight: bold;'] * len(row)
+            elif 'HIGH' in risk:
+                return ['background-color: #f8d7da; font-weight: bold;'] * len(row)
+            elif 'POTENTIAL' in risk:
+                return ['background-color: #fff3cd;'] * len(row)
+            return [''] * len(row)
+        
+        st.dataframe(
+            high_risk_df.style.apply(highlight_risk, axis=1),
+            use_container_width=True,
+            hide_index=True,
+            column_config=column_config
+        )
+        
+        csv = high_risk_df.to_csv(index=False)
+        st.download_button("📥 Download Report", data=csv, file_name=f"high_risk_customers_{current_year}.csv", mime="text/csv")
+        
+    elif st.session_state.high_risk_data is not None:
+        st.info("✅ No high-risk customers found!")
 
 # ================= TAB 4: City Analysis =================
 with tab4:
-st.markdown("## 🏙️ City-wise Refund Analysis")
-st.markdown("*City-wise refund amounts and instances (standardized city names)*")
-
-@st.cache_data(ttl=300)
-def load_city_data():
-cash_df = load_sheet(st.secrets["cash_upi_sheet_id"], "Form Responses 1")
-jc_df = load_sheet(st.secrets["jumbocash_sheet_id"], "Form Responses 1")
-manual_df = load_sheet(st.secrets["cash_upi_sheet_id"], "cash refund")
-return cash_df, jc_df, manual_df
-
-if 'city_data' not in st.session_state:
-st.session_state.city_data = None
-
-if st.button("🔄 Load City Analysis"):
-cash_df, jc_df, manual_df = load_city_data()
-with st.spinner("Analyzing city data..."):
-    city_data = get_city_analysis(cash_df, jc_df, manual_df, current_year, current_month)
-    st.session_state.city_data = city_data
-
-if st.session_state.city_data is not None and not st.session_state.city_data.empty:
-city_df = st.session_state.city_data
-
-col1, col2, col3 = st.columns(3)
-with col1:
-    st.metric("Total Cities", city_df["City"].nunique())
-with col2:
-    st.metric("Total Instances", city_df["Total_Instances"].sum())
-with col3:
-    st.metric("Total Amount", f"₹{city_df['Total_Amount'].sum():,.2f}")
-
-st.dataframe(
-    city_df,
-    use_container_width=True,
-    hide_index=True,
-    column_config={
-        "City": st.column_config.TextColumn("City"),
-        "Total_Instances": st.column_config.NumberColumn("Total Instances", format="%d"),
-        "Total_Amount": st.column_config.NumberColumn("Total Amount (₹)", format="₹%.2f")
-    }
-)
-
-st.markdown("### 🔝 Top Cities by Refund Amount")
-st.bar_chart(city_df.set_index("City")["Total_Amount"].head(15))
-
-elif st.session_state.city_data is not None:
-st.info("✅ No city data found!")
+    st.markdown("## 🏙️ City-wise Refund Analysis")
+    st.markdown("*City-wise refund amounts and instances (standardized city names)*")
+    
+    @st.cache_data(ttl=300)
+    def load_city_data():
+        cash_df = load_sheet(st.secrets["cash_upi_sheet_id"], "Form Responses 1")
+        jc_df = load_sheet(st.secrets["jumbocash_sheet_id"], "Form Responses 1")
+        manual_df = load_sheet(st.secrets["cash_upi_sheet_id"], "cash refund")
+        return cash_df, jc_df, manual_df
+    
+    if 'city_data' not in st.session_state:
+        st.session_state.city_data = None
+    
+    if st.button("🔄 Load City Analysis"):
+        cash_df, jc_df, manual_df = load_city_data()
+        with st.spinner("Analyzing city data..."):
+            city_data = get_city_analysis(cash_df, jc_df, manual_df, current_year, current_month)
+            st.session_state.city_data = city_data
+    
+    if st.session_state.city_data is not None and not st.session_state.city_data.empty:
+        city_df = st.session_state.city_data
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Total Cities", city_df["City"].nunique())
+        with col2:
+            st.metric("Total Instances", city_df["Total_Instances"].sum())
+        with col3:
+            st.metric("Total Amount", f"₹{city_df['Total_Amount'].sum():,.2f}")
+        
+        st.dataframe(
+            city_df,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "City": st.column_config.TextColumn("City"),
+                "Total_Instances": st.column_config.NumberColumn("Total Instances", format="%d"),
+                "Total_Amount": st.column_config.NumberColumn("Total Amount (₹)", format="₹%.2f")
+            }
+        )
+        
+        st.markdown("### 🔝 Top Cities by Refund Amount")
+        st.bar_chart(city_df.set_index("City")["Total_Amount"].head(15))
+        
+    elif st.session_state.city_data is not None:
+        st.info("✅ No city data found!")
 
 # ================= TAB 5: Hub Analysis =================
 with tab5:
-st.markdown("## 🏪 Hub-wise Refund Analysis")
-st.markdown("*Hub-wise refund amounts and instances (original hub codes preserved)*")
-
-@st.cache_data(ttl=300)
-def load_hub_data():
-cash_df = load_sheet(st.secrets["cash_upi_sheet_id"], "Form Responses 1")
-jc_df = load_sheet(st.secrets["jumbocash_sheet_id"], "Form Responses 1")
-manual_df = load_sheet(st.secrets["cash_upi_sheet_id"], "cash refund")
-return cash_df, jc_df, manual_df
-
-if 'hub_data' not in st.session_state:
-st.session_state.hub_data = None
-
-if st.button("🔄 Load Hub Analysis"):
-cash_df, jc_df, manual_df = load_hub_data()
-with st.spinner("Analyzing hub data..."):
-    hub_data = get_hub_analysis(cash_df, jc_df, manual_df, current_year, current_month)
-    st.session_state.hub_data = hub_data
-
-if st.session_state.hub_data is not None and not st.session_state.hub_data.empty:
-hub_df = st.session_state.hub_data
-
-col1, col2, col3 = st.columns(3)
-with col1:
-    st.metric("Total Hubs", hub_df["Hub"].nunique())
-with col2:
-    st.metric("Total Instances", hub_df["Total_Instances"].sum())
-with col3:
-    st.metric("Total Amount", f"₹{hub_df['Total_Amount'].sum():,.2f}")
-
-st.dataframe(
-    hub_df,
-    use_container_width=True,
-    hide_index=True,
-    column_config={
-        "Hub": st.column_config.TextColumn("Hub"),
-        "Total_Instances": st.column_config.NumberColumn("Total Instances", format="%d"),
-        "Total_Amount": st.column_config.NumberColumn("Total Amount (₹)", format="₹%.2f")
-    }
-)
-
-st.markdown("### 🔝 Top Hubs by Refund Amount")
-st.bar_chart(hub_df.set_index("Hub")["Total_Amount"].head(15))
-
-elif st.session_state.hub_data is not None:
-st.info("✅ No hub data found!")
+    st.markdown("## 🏪 Hub-wise Refund Analysis")
+    st.markdown("*Hub-wise refund amounts and instances (original hub codes preserved)*")
+    
+    @st.cache_data(ttl=300)
+    def load_hub_data():
+        cash_df = load_sheet(st.secrets["cash_upi_sheet_id"], "Form Responses 1")
+        jc_df = load_sheet(st.secrets["jumbocash_sheet_id"], "Form Responses 1")
+        manual_df = load_sheet(st.secrets["cash_upi_sheet_id"], "cash refund")
+        return cash_df, jc_df, manual_df
+    
+    if 'hub_data' not in st.session_state:
+        st.session_state.hub_data = None
+    
+    if st.button("🔄 Load Hub Analysis"):
+        cash_df, jc_df, manual_df = load_hub_data()
+        with st.spinner("Analyzing hub data..."):
+            hub_data = get_hub_analysis(cash_df, jc_df, manual_df, current_year, current_month)
+            st.session_state.hub_data = hub_data
+    
+    if st.session_state.hub_data is not None and not st.session_state.hub_data.empty:
+        hub_df = st.session_state.hub_data
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Total Hubs", hub_df["Hub"].nunique())
+        with col2:
+            st.metric("Total Instances", hub_df["Total_Instances"].sum())
+        with col3:
+            st.metric("Total Amount", f"₹{hub_df['Total_Amount'].sum():,.2f}")
+        
+        st.dataframe(
+            hub_df,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Hub": st.column_config.TextColumn("Hub"),
+                "Total_Instances": st.column_config.NumberColumn("Total Instances", format="%d"),
+                "Total_Amount": st.column_config.NumberColumn("Total Amount (₹)", format="₹%.2f")
+            }
+        )
+        
+        st.markdown("### 🔝 Top Hubs by Refund Amount")
+        st.bar_chart(hub_df.set_index("Hub")["Total_Amount"].head(15))
+        
+    elif st.session_state.hub_data is not None:
+        st.info("✅ No hub data found!")
 
 # ================= FOOTER =================
 st.markdown("---")
