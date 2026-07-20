@@ -439,10 +439,10 @@ def get_hub_analysis(cash_df, jc_df, manual_df, year, current_month):
     
     return hub_summary
 
-# ================= BANK TRANSFER ANALYSIS =================
+# ================= BANK TRANSFER DATA =================
 @st.cache_data(ttl=300)
-def get_bank_transfer_analysis(bank_df, year, current_month):
-    """Analyze bank transfer refund data"""
+def get_bank_transfer_data(bank_df, selected_month=None, selected_year=None, ticket_id=None):
+    """Filter bank transfer data by month/year or ticket ID"""
     if bank_df.empty:
         return pd.DataFrame()
     
@@ -450,77 +450,105 @@ def get_bank_transfer_analysis(bank_df, year, current_month):
     
     # Find Date column
     date_col = None
-    for col in ["Date", "date", "Date"]:
+    for col in ["Date", "date"]:
         if col in df.columns:
             date_col = col
             break
     
-    if date_col is None:
-        return pd.DataFrame()
+    if date_col is not None:
+        df["Date"] = pd.to_datetime(df[date_col], errors="coerce", dayfirst=True)
+        df = df[df["Date"].notna()]
     
-    # Convert date
-    df["Date"] = pd.to_datetime(df[date_col], errors="coerce", dayfirst=True)
-    df = df[df["Date"].notna()]
-    df = df[(df["Date"].dt.year == year) & (df["Date"].dt.month <= current_month)]
+    # Filter by ticket ID if provided
+    if ticket_id:
+        ticket_col = None
+        for col in ["Ticket ID", "Ticket id", "Ticket No"]:
+            if col in df.columns:
+                ticket_col = col
+                break
+        
+        if ticket_col:
+            df = df[df[ticket_col].astype(str).str.strip() == str(ticket_id).strip()]
+        else:
+            return pd.DataFrame()
+        
+        if df.empty:
+            return pd.DataFrame()
+        
+        # Format for single ticket display
+        rename_map = {
+            "Ticket ID": "Ticket ID",
+            "Amount": "Amount (₹)",
+            "UTR NUMBER": "UTR Number",
+            "Status": "Status",
+            "Date": "Date",
+            "HUB": "Hub",
+            "City": "City",
+            "Reason": "Reason",
+            "Phone Number": "Phone Number"
+        }
+        
+        available_cols = [col for col in rename_map.keys() if col in df.columns]
+        df_display = df[available_cols].copy()
+        
+        for old, new in rename_map.items():
+            if old in df_display.columns:
+                df_display.rename(columns={old: new}, inplace=True)
+        
+        # Format amount
+        if "Amount (₹)" in df_display.columns:
+            df_display["Amount (₹)"] = df_display["Amount (₹)"].apply(lambda x: f"₹{x:.2f}" if pd.notna(x) else "₹0.00")
+        
+        # Format date
+        if "Date" in df_display.columns and date_col is not None:
+            df_display["Date"] = df_display["Date"].dt.strftime("%d-%m-%Y")
+        
+        return df_display
+    
+    # Filter by month/year if provided
+    if selected_month and selected_year:
+        df = df[
+            (df["Date"].dt.month == selected_month) &
+            (df["Date"].dt.year == selected_year)
+        ]
     
     if df.empty:
         return pd.DataFrame()
     
-    # Standardize city names
+    # Standardize city names if City column exists
     if "City" in df.columns:
         df["City"] = df["City"].astype(str).apply(standardize_city_name)
     
-    # Get summary metrics
-    summary = {
-        "Total_Transactions": len(df),
-        "Total_Amount": df["Amount"].sum() if "Amount" in df.columns else 0,
-        "Success_Count": len(df[df["Status"].str.lower() == "sucess"]) if "Status" in df.columns else 0,
-        "Unique_Hubs": df["HUB"].nunique() if "HUB" in df.columns else 0,
-        "Unique_Cities": df["City"].nunique() if "City" in df.columns else 0
+    # Select relevant columns for display
+    display_cols = ["Ticket ID", "Amount", "UTR NUMBER", "Status", "Date", "HUB", "City", "Reason"]
+    available_cols = [col for col in display_cols if col in df.columns]
+    
+    # Rename columns for better display
+    rename_map = {
+        "Ticket ID": "Ticket ID",
+        "Amount": "Amount (₹)",
+        "UTR NUMBER": "UTR Number",
+        "Status": "Status",
+        "Date": "Date",
+        "HUB": "Hub",
+        "City": "City",
+        "Reason": "Reason"
     }
     
-    # Hub-wise breakdown
-    if "HUB" in df.columns:
-        hub_breakdown = df.groupby("HUB").agg(
-            Transaction_Count=("Amount", "count"),
-            Total_Amount=("Amount", "sum")
-        ).reset_index().sort_values("Total_Amount", ascending=False)
-    else:
-        hub_breakdown = pd.DataFrame()
+    df_display = df[available_cols].copy()
+    for old, new in rename_map.items():
+        if old in df_display.columns:
+            df_display.rename(columns={old: new}, inplace=True)
     
-    # City-wise breakdown
-    if "City" in df.columns:
-        city_breakdown = df.groupby("City").agg(
-            Transaction_Count=("Amount", "count"),
-            Total_Amount=("Amount", "sum")
-        ).reset_index().sort_values("Total_Amount", ascending=False)
-    else:
-        city_breakdown = pd.DataFrame()
+    # Format amount
+    if "Amount (₹)" in df_display.columns:
+        df_display["Amount (₹)"] = df_display["Amount (₹)"].apply(lambda x: f"₹{x:.2f}" if pd.notna(x) else "₹0.00")
     
-    # Status breakdown
-    if "Status" in df.columns:
-        status_breakdown = df.groupby("Status").agg(
-            Transaction_Count=("Amount", "count"),
-            Total_Amount=("Amount", "sum")
-        ).reset_index()
-    else:
-        status_breakdown = pd.DataFrame()
+    # Format date
+    if "Date" in df_display.columns and date_col is not None:
+        df_display["Date"] = df_display["Date"].dt.strftime("%d-%m-%Y")
     
-    # Monthly trend
-    df["Month"] = df["Date"].dt.strftime("%B %Y")
-    monthly_trend = df.groupby("Month").agg(
-        Transaction_Count=("Amount", "count"),
-        Total_Amount=("Amount", "sum")
-    ).reset_index().sort_values("Month")
-    
-    return {
-        "summary": summary,
-        "hub_breakdown": hub_breakdown,
-        "city_breakdown": city_breakdown,
-        "status_breakdown": status_breakdown,
-        "monthly_trend": monthly_trend,
-        "raw_data": df
-    }
+    return df_display
 
 # ================= REFRESH =================
 if st.button("🔄 Refresh Data"):
@@ -528,45 +556,49 @@ if st.button("🔄 Refresh Data"):
     st.rerun()
 
 # ================= TAB SELECTION =================
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["🔍 Individual Search", "📊 High Risk Customers", "🏙️ City Analysis", "🏪 Hub Analysis", "🏦 Bank Transfers"])
+tab1, tab2, tab3, tab4 = st.tabs(["🔍 Individual Search", "📊 High Risk Customers", "🏙️ City Analysis", "🏪 Hub Analysis"])
 
 # ================= TAB 1: Individual Search =================
 with tab1:
+    # Search inputs - BZID and Ticket ID side by side
     col1, col2 = st.columns(2)
-    bzid_input = col1.text_input("Enter BZID")
+    
+    with col1:
+        bzid_input = st.text_input("Enter BZID")
+    
+    with col2:
+        ticket_id_input = st.text_input("Enter Ticket ID (for Bank Transfer)")
     
     current_year = datetime.now().year
     current_month = datetime.now().month
     
     month_options = {datetime(current_year, i, 1).strftime("%B %Y"): i for i in range(1, 13)}
-    selected_month_label = col2.selectbox("Select Month", list(month_options.keys()))
+    selected_month_label = st.selectbox("Select Month", list(month_options.keys()))
     month_input = month_options[selected_month_label]
     selected_year = int(selected_month_label.split()[-1])
     
     if st.button("Fetch Details"):
-        if not bzid_input:
-            st.warning("Enter BZID")
+        if not bzid_input and not ticket_id_input:
+            st.warning("Please enter either a BZID or a Ticket ID")
             st.stop()
         
-        bzid = bzid_input.strip().upper()
-        
+        # Load all data
         with st.spinner("Fetching data..."):
             cash_df = load_sheet(st.secrets["cash_upi_sheet_id"], "Form Responses 1")
             jc_df = load_sheet(st.secrets["jumbocash_sheet_id"], "Form Responses 1")
             manual_df = load_sheet(st.secrets["cash_upi_sheet_id"], "cash refund")
+            
+            # Load bank transfer data
+            try:
+                bank_df = load_sheet(st.secrets["bank_transfer_sheet_id"], "CD Refund Sheet")
+            except:
+                bank_df = pd.DataFrame()
             
             # CASH / UPI
             cash_df["BZID"] = cash_df["Business ID"].astype(str).str.strip().str.upper()
             cash_df["Date"] = pd.to_datetime(cash_df["Date"], errors="coerce")
             if "Timestamp" in cash_df.columns:
                 cash_df["Date"] = cash_df["Date"].fillna(pd.to_datetime(cash_df["Timestamp"], errors="coerce"))
-            
-            cash_current_matches = cash_df[
-                (cash_df["BZID"] == bzid) &
-                (cash_df["Date"].notna()) &
-                (cash_df["Date"].dt.month == month_input) &
-                (cash_df["Date"].dt.year == selected_year)
-            ]
             
             # JUMBOCASH
             jc_df.columns = jc_df.columns.str.strip()
@@ -580,6 +612,53 @@ with tab1:
             if "Timestamp" in jc_df.columns:
                 jc_df["Date"] = jc_df["Date"].fillna(pd.to_datetime(jc_df["Timestamp"], errors="coerce"))
             
+            # MANUAL CASH
+            manual_df["BZID"] = manual_df["BZID"].astype(str).str.strip().str.upper()
+            manual_df["Date"] = pd.to_datetime(manual_df["Date"], errors="coerce")
+            if "Timestamp" in manual_df.columns:
+                manual_df["Date"] = manual_df["Date"].fillna(pd.to_datetime(manual_df["Timestamp"], errors="coerce"))
+        
+        # Check if searching by Ticket ID
+        if ticket_id_input:
+            bank_details = get_bank_transfer_data(bank_df, ticket_id=str(ticket_id_input))
+            
+            if not bank_details.empty:
+                st.markdown("---")
+                st.markdown("## 🏦 Bank Transfer Details")
+                st.dataframe(bank_details, use_container_width=True, hide_index=True)
+                
+                # Show bank transfer details in a nice card format
+                for _, row in bank_details.iterrows():
+                    st.markdown(f"""
+                    <div style="background-color: #f8f9fa; padding: 15px; border-radius: 10px; margin: 10px 0; border: 1px solid #dee2e6;">
+                        <h4>Ticket ID: {row.get('Ticket ID', 'N/A')}</h4>
+                        <table style="width: 100%;">
+                            <tr><td><b>Amount:</b></td><td>{row.get('Amount (₹)', 'N/A')}</td></tr>
+                            <tr><td><b>UTR Number:</b></td><td>{row.get('UTR Number', 'N/A')}</td></tr>
+                            <tr><td><b>Status:</b></td><td>{row.get('Status', 'N/A')}</td></tr>
+                            <tr><td><b>Date:</b></td><td>{row.get('Date', 'N/A')}</td></tr>
+                            <tr><td><b>Hub:</b></td><td>{row.get('Hub', 'N/A')}</td></tr>
+                            <tr><td><b>City:</b></td><td>{row.get('City', 'N/A')}</td></tr>
+                            <tr><td><b>Reason:</b></td><td>{row.get('Reason', 'N/A')}</td></tr>
+                            <tr><td><b>Phone Number:</b></td><td>{row.get('Phone Number', 'N/A')}</td></tr>
+                        </table>
+                    </div>
+                    """, unsafe_allow_html=True)
+            else:
+                st.warning(f"No bank transfer found for Ticket ID: {ticket_id_input}")
+        
+        # Process BZID search (if provided)
+        if bzid_input:
+            bzid = bzid_input.strip().upper()
+            
+            # Filter data for BZID
+            cash_current_matches = cash_df[
+                (cash_df["BZID"] == bzid) &
+                (cash_df["Date"].notna()) &
+                (cash_df["Date"].dt.month == month_input) &
+                (cash_df["Date"].dt.year == selected_year)
+            ]
+            
             jc_current_matches = jc_df[
                 (jc_df["BZID"] == bzid) &
                 (jc_df["Date"].notna()) &
@@ -587,18 +666,16 @@ with tab1:
                 (jc_df["Date"].dt.year == selected_year)
             ]
             
-            # MANUAL CASH
-            manual_df["BZID"] = manual_df["BZID"].astype(str).str.strip().str.upper()
-            manual_df["Date"] = pd.to_datetime(manual_df["Date"], errors="coerce")
-            if "Timestamp" in manual_df.columns:
-                manual_df["Date"] = manual_df["Date"].fillna(pd.to_datetime(manual_df["Timestamp"], errors="coerce"))
-            
             manual_current_matches = manual_df[
                 (manual_df["BZID"] == bzid) &
                 (manual_df["Date"].notna()) &
                 (manual_df["Date"].dt.month == month_input) &
                 (manual_df["Date"].dt.year == selected_year)
             ]
+            
+            # BANK TRANSFER for this BZID (if we have phone number mapping)
+            # Note: Bank transfer sheet doesn't have BZID, so we can't filter by BZID directly
+            bank_current_matches = pd.DataFrame()
             
             # COUNTS
             cash_count_current = cash_current_matches["Ticket Number"].nunique() if not cash_current_matches.empty else 0
@@ -617,144 +694,144 @@ with tab1:
             current_year_count = get_refund_count_for_period(all_refunds, bzid, current_year, 1, current_month)
             last_year_count = get_refund_count_for_period(all_refunds, bzid, current_year - 1, 1, current_month)
             month_names, monthly_counts = get_monthly_counts(all_refunds, bzid, current_year)
-        
-        # DISPLAY
-        col_left, col_right = st.columns([1, 1])
-        
-        with col_left:
-            st.markdown(f"## 📊 Current Month")
-            st.markdown(f"### {selected_month_label}")
             
-            if total_count_current < 5:
-                st.markdown(f"""
-                <div class="decision-approve">
-                    <div class="decision-icon tick-mark">✅</div>
-                    <div class="decision-text">
-                        <h2 style="color: #28a745; margin: 0;">APPROVED</h2>
-                        <p style="font-size: 18px; margin: 5px 0;">Total Refunds: {total_count_current} (Less than 5)</p>
+            # DISPLAY BZID Results
+            col_left, col_right = st.columns([1, 1])
+            
+            with col_left:
+                st.markdown(f"## 📊 Current Month")
+                st.markdown(f"### {selected_month_label}")
+                
+                if total_count_current < 5:
+                    st.markdown(f"""
+                    <div class="decision-approve">
+                        <div class="decision-icon tick-mark">✅</div>
+                        <div class="decision-text">
+                            <h2 style="color: #28a745; margin: 0;">APPROVED</h2>
+                            <p style="font-size: 18px; margin: 5px 0;">Total Refunds: {total_count_current} (Less than 5)</p>
+                        </div>
                     </div>
-                </div>
-                """, unsafe_allow_html=True)
-            else:
-                st.markdown(f"""
-                <div class="decision-deny">
-                    <div class="decision-icon cross-mark">❌</div>
-                    <div class="decision-text">
-                        <h2 style="color: #dc3545; margin: 0;">DENIED</h2>
-                        <p style="font-size: 18px; margin: 5px 0;">Total Refunds: {total_count_current} (5 or more - Limit reached)</p>
+                    """, unsafe_allow_html=True)
+                else:
+                    st.markdown(f"""
+                    <div class="decision-deny">
+                        <div class="decision-icon cross-mark">❌</div>
+                        <div class="decision-text">
+                            <h2 style="color: #dc3545; margin: 0;">DENIED</h2>
+                            <p style="font-size: 18px; margin: 5px 0;">Total Refunds: {total_count_current} (5 or more - Limit reached)</p>
+                        </div>
                     </div>
+                    """, unsafe_allow_html=True)
+                
+                if total_count_current >= 5:
+                    st.markdown("""
+                    <div style="text-align: center; padding: 10px; background-color: #f8d7da; border-radius: 10px; margin-top: 10px;">
+                        <span style="font-size: 32px;">🚶</span>
+                        <span style="font-size: 24px; margin-left: 10px;">❌</span>
+                        <p style="margin: 5px 0 0 0; font-size: 14px; color: #721c24;">Limit reached! Walk away from this request.</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                else:
+                    st.markdown("""
+                    <div style="text-align: center; padding: 10px; background-color: #d4edda; border-radius: 10px; margin-top: 10px;">
+                        <span style="font-size: 32px;">✅</span>
+                        <span style="font-size: 24px; margin-left: 10px;">👍</span>
+                        <p style="margin: 5px 0 0 0; font-size: 14px; color: #155724;">All good! Proceed with the refund.</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.metric("💳 Cash / UPI", cash_count_current, f"₹{round(cash_amount_current, 2)}")
+                    st.metric("💵 Manual Cash", manual_count_current, f"₹{round(manual_amount_current, 2)}")
+                with c2:
+                    st.metric("🏦 Jumbocash", jc_count_current, f"₹{round(jc_amount_current, 2)}")
+                    st.metric("📦 Total", total_count_current, f"₹{round(total_amount_current, 2)}")
+            
+            with col_right:
+                st.markdown(f"## 📋 Refund Details")
+                st.markdown(f"### {selected_month_label}")
+                
+                tabs_inner = st.tabs(["💳 Cash/UPI", "🏦 Jumbocash", "💵 Manual Cash"])
+                
+                with tabs_inner[0]:
+                    if not cash_current_matches.empty:
+                        st.dataframe(cash_current_matches.reset_index(drop=True), use_container_width=True, height=300)
+                    else:
+                        st.info("No Cash/UPI refunds for this month")
+                
+                with tabs_inner[1]:
+                    if not jc_current_matches.empty:
+                        st.dataframe(jc_current_matches.reset_index(drop=True), use_container_width=True, height=300)
+                    else:
+                        st.info("No Jumbocash refunds for this month")
+                
+                with tabs_inner[2]:
+                    if not manual_current_matches.empty:
+                        st.dataframe(manual_current_matches.reset_index(drop=True), use_container_width=True, height=300)
+                    else:
+                        st.info("No Manual Cash refunds for this month")
+            
+            # YEARLY TREND
+            st.markdown("---")
+            st.markdown(f"## 📈 Yearly Refund Trend (Jan - {datetime(current_year, current_month, 1).strftime('%B')})")
+            
+            col1, col2, col3 = st.columns([1, 1, 2])
+            with col1:
+                st.markdown(f"""
+                <div class="trend-card">
+                    <p style="margin: 0; opacity: 0.8;">Current Year</p>
+                    <h2 style="margin: 5px 0;">{current_year}</h2>
+                    <h1 style="margin: 5px 0;">{current_year_count}</h1>
+                    <p style="margin: 0; opacity: 0.9;">Jan - {datetime(current_year, current_month, 1).strftime('%b')} Total</p>
                 </div>
                 """, unsafe_allow_html=True)
             
-            if total_count_current >= 5:
-                st.markdown("""
-                <div style="text-align: center; padding: 10px; background-color: #f8d7da; border-radius: 10px; margin-top: 10px;">
-                    <span style="font-size: 32px;">🚶</span>
-                    <span style="font-size: 24px; margin-left: 10px;">❌</span>
-                    <p style="margin: 5px 0 0 0; font-size: 14px; color: #721c24;">Limit reached! Walk away from this request.</p>
-                </div>
-                """, unsafe_allow_html=True)
-            else:
-                st.markdown("""
-                <div style="text-align: center; padding: 10px; background-color: #d4edda; border-radius: 10px; margin-top: 10px;">
-                    <span style="font-size: 32px;">✅</span>
-                    <span style="font-size: 24px; margin-left: 10px;">👍</span>
-                    <p style="margin: 5px 0 0 0; font-size: 14px; color: #155724;">All good! Proceed with the refund.</p>
+            with col2:
+                st.markdown(f"""
+                <div class="trend-card-previous">
+                    <p style="margin: 0; opacity: 0.8;">Previous Year</p>
+                    <h2 style="margin: 5px 0;">{current_year - 1}</h2>
+                    <h1 style="margin: 5px 0;">{last_year_count}</h1>
+                    <p style="margin: 0; opacity: 0.9;">Jan - {datetime(current_year, current_month, 1).strftime('%b')} Total</p>
                 </div>
                 """, unsafe_allow_html=True)
             
-            c1, c2 = st.columns(2)
-            with c1:
-                st.metric("💳 Cash / UPI", cash_count_current, f"₹{round(cash_amount_current, 2)}")
-                st.metric("💵 Manual Cash", manual_count_current, f"₹{round(manual_amount_current, 2)}")
-            with c2:
-                st.metric("🏦 Jumbocash", jc_count_current, f"₹{round(jc_amount_current, 2)}")
-                st.metric("📦 Total", total_count_current, f"₹{round(total_amount_current, 2)}")
-        
-        with col_right:
-            st.markdown(f"## 📋 Refund Details")
-            st.markdown(f"### {selected_month_label}")
-            
-            tabs_inner = st.tabs(["💳 Cash/UPI", "🏦 Jumbocash", "💵 Manual Cash"])
-            
-            with tabs_inner[0]:
-                if not cash_current_matches.empty:
-                    st.dataframe(cash_current_matches.reset_index(drop=True), use_container_width=True, height=300)
+            with col3:
+                if last_year_count > 0:
+                    change = ((current_year_count - last_year_count) / last_year_count) * 100
+                    direction = "📈" if change > 0 else "📉" if change < 0 else "➡️"
+                    change_text = f"{direction} {abs(change):.1f}%"
                 else:
-                    st.info("No Cash/UPI refunds for this month")
+                    change_text = "New data" if current_year_count > 0 else "No data"
+                
+                st.markdown(f"""
+                <div style="background-color: #f8f9fa; border-radius: 10px; padding: 20px; height: 100%; display: flex; flex-direction: column; justify-content: center;">
+                    <p style="margin: 0; color: #6c757d; font-size: 14px;">Year-over-Year Change<br><small style="color: #999;">(Jan - {datetime(current_year, current_month, 1).strftime('%b')})</small></p>
+                    <h2 style="margin: 5px 0; color: {'#28a745' if current_year_count >= last_year_count else '#dc3545'}">{change_text}</h2>
+                    <p style="margin: 0; color: #6c757d; font-size: 14px;">{current_year_count} vs {last_year_count} refunds</p>
+                </div>
+                """, unsafe_allow_html=True)
             
-            with tabs_inner[1]:
-                if not jc_current_matches.empty:
-                    st.dataframe(jc_current_matches.reset_index(drop=True), use_container_width=True, height=300)
-                else:
-                    st.info("No Jumbocash refunds for this month")
+            # Monthly breakdown
+            st.markdown("### 📅 Monthly Breakdown")
+            monthly_data = []
+            for i, month in enumerate(month_names):
+                status = "📍 Current" if i == month_input - 1 else ""
+                if selected_year == current_year and i >= current_month:
+                    status = "⏳ Future" if status != "📍 Current" else status
+                monthly_data.append({"Month": month, "Refunds": monthly_counts[i], "Status": status})
             
-            with tabs_inner[2]:
-                if not manual_current_matches.empty:
-                    st.dataframe(manual_current_matches.reset_index(drop=True), use_container_width=True, height=300)
-                else:
-                    st.info("No Manual Cash refunds for this month")
-        
-        # YEARLY TREND
-        st.markdown("---")
-        st.markdown(f"## 📈 Yearly Refund Trend (Jan - {datetime(current_year, current_month, 1).strftime('%B')})")
-        
-        col1, col2, col3 = st.columns([1, 1, 2])
-        with col1:
-            st.markdown(f"""
-            <div class="trend-card">
-                <p style="margin: 0; opacity: 0.8;">Current Year</p>
-                <h2 style="margin: 5px 0;">{current_year}</h2>
-                <h1 style="margin: 5px 0;">{current_year_count}</h1>
-                <p style="margin: 0; opacity: 0.9;">Jan - {datetime(current_year, current_month, 1).strftime('%b')} Total</p>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        with col2:
-            st.markdown(f"""
-            <div class="trend-card-previous">
-                <p style="margin: 0; opacity: 0.8;">Previous Year</p>
-                <h2 style="margin: 5px 0;">{current_year - 1}</h2>
-                <h1 style="margin: 5px 0;">{last_year_count}</h1>
-                <p style="margin: 0; opacity: 0.9;">Jan - {datetime(current_year, current_month, 1).strftime('%b')} Total</p>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        with col3:
-            if last_year_count > 0:
-                change = ((current_year_count - last_year_count) / last_year_count) * 100
-                direction = "📈" if change > 0 else "📉" if change < 0 else "➡️"
-                change_text = f"{direction} {abs(change):.1f}%"
-            else:
-                change_text = "New data" if current_year_count > 0 else "No data"
+            monthly_df = pd.DataFrame(monthly_data)
             
-            st.markdown(f"""
-            <div style="background-color: #f8f9fa; border-radius: 10px; padding: 20px; height: 100%; display: flex; flex-direction: column; justify-content: center;">
-                <p style="margin: 0; color: #6c757d; font-size: 14px;">Year-over-Year Change<br><small style="color: #999;">(Jan - {datetime(current_year, current_month, 1).strftime('%b')})</small></p>
-                <h2 style="margin: 5px 0; color: {'#28a745' if current_year_count >= last_year_count else '#dc3545'}">{change_text}</h2>
-                <p style="margin: 0; color: #6c757d; font-size: 14px;">{current_year_count} vs {last_year_count} refunds</p>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        # Monthly breakdown
-        st.markdown("### 📅 Monthly Breakdown")
-        monthly_data = []
-        for i, month in enumerate(month_names):
-            status = "📍 Current" if i == month_input - 1 else ""
-            if selected_year == current_year and i >= current_month:
-                status = "⏳ Future" if status != "📍 Current" else status
-            monthly_data.append({"Month": month, "Refunds": monthly_counts[i], "Status": status})
-        
-        monthly_df = pd.DataFrame(monthly_data)
-        
-        def highlight_current(row):
-            if row['Status'] == '📍 Current':
-                return ['background-color: #e3f2fd'] * len(row)
-            elif row['Status'] == '⏳ Future':
-                return ['background-color: #f5f5f5; color: #999'] * len(row)
-            return [''] * len(row)
-        
-        st.dataframe(monthly_df.style.apply(highlight_current, axis=1), use_container_width=True, hide_index=True)
+            def highlight_current(row):
+                if row['Status'] == '📍 Current':
+                    return ['background-color: #e3f2fd'] * len(row)
+                elif row['Status'] == '⏳ Future':
+                    return ['background-color: #f5f5f5; color: #999'] * len(row)
+                return [''] * len(row)
+            
+            st.dataframe(monthly_df.style.apply(highlight_current, axis=1), use_container_width=True, hide_index=True)
 
 # ================= TAB 2: High Risk Customers =================
 with tab2:
@@ -944,133 +1021,6 @@ with tab4:
         
     elif st.session_state.hub_data is not None:
         st.info("✅ No hub data found!")
-
-# ================= TAB 5: Bank Transfers =================
-with tab5:
-    st.markdown("## 🏦 Bank Transfer Refunds (CD Refund Sheet)")
-    st.markdown("*Bank transfer refund transactions with UTR numbers and status*")
-    
-    # Add note about bank transfer sheet ID in secrets
-    st.info("📌 Make sure to add `bank_transfer_sheet_id` to your secrets with the sheet ID: `1QgGIeSgCSXSE_8CDosYWcAEF2NkA249Mv_EIafJrIj8`")
-    
-    @st.cache_data(ttl=300)
-    def load_bank_data():
-        try:
-            bank_df = load_sheet(st.secrets["bank_transfer_sheet_id"], "CD Refund Sheet")
-            return bank_df
-        except:
-            return pd.DataFrame()
-    
-    if 'bank_data' not in st.session_state:
-        st.session_state.bank_data = None
-    
-    if st.button("🔄 Load Bank Transfer Data"):
-        with st.spinner("Loading bank transfer data..."):
-            bank_df = load_bank_data()
-            if not bank_df.empty:
-                bank_analysis = get_bank_transfer_analysis(bank_df, current_year, current_month)
-                st.session_state.bank_data = bank_analysis
-            else:
-                st.session_state.bank_data = {"error": "No data found or sheet not accessible"}
-    
-    if st.session_state.bank_data is not None and "error" not in st.session_state.bank_data:
-        bank = st.session_state.bank_data
-        
-        # Summary metrics
-        col1, col2, col3, col4, col5 = st.columns(5)
-        with col1:
-            st.metric("Total Transactions", bank["summary"]["Total_Transactions"])
-        with col2:
-            st.metric("Total Amount", f"₹{bank['summary']['Total_Amount']:,.2f}")
-        with col3:
-            st.metric("Successful", bank["summary"]["Success_Count"])
-        with col4:
-            st.metric("Unique Hubs", bank["summary"]["Unique_Hubs"])
-        with col5:
-            st.metric("Unique Cities", bank["summary"]["Unique_Cities"])
-        
-        # Status breakdown
-        if not bank["status_breakdown"].empty:
-            st.markdown("### 📊 Status Breakdown")
-            st.dataframe(
-                bank["status_breakdown"],
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "Status": st.column_config.TextColumn("Status"),
-                    "Transaction_Count": st.column_config.NumberColumn("Count", format="%d"),
-                    "Total_Amount": st.column_config.NumberColumn("Total Amount (₹)", format="₹%.2f")
-                }
-            )
-        
-        # Hub-wise breakdown
-        if not bank["hub_breakdown"].empty:
-            st.markdown("### 🏪 Hub-wise Bank Transfers")
-            st.dataframe(
-                bank["hub_breakdown"],
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "HUB": st.column_config.TextColumn("Hub"),
-                    "Transaction_Count": st.column_config.NumberColumn("Count", format="%d"),
-                    "Total_Amount": st.column_config.NumberColumn("Total Amount (₹)", format="₹%.2f")
-                }
-            )
-            st.bar_chart(bank["hub_breakdown"].set_index("HUB")["Total_Amount"].head(10))
-        
-        # City-wise breakdown
-        if not bank["city_breakdown"].empty:
-            st.markdown("### 🏙️ City-wise Bank Transfers")
-            st.dataframe(
-                bank["city_breakdown"],
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "City": st.column_config.TextColumn("City"),
-                    "Transaction_Count": st.column_config.NumberColumn("Count", format="%d"),
-                    "Total_Amount": st.column_config.NumberColumn("Total Amount (₹)", format="₹%.2f")
-                }
-            )
-        
-        # Monthly trend
-        if not bank["monthly_trend"].empty:
-            st.markdown("### 📈 Monthly Bank Transfer Trend")
-            st.dataframe(
-                bank["monthly_trend"],
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "Month": st.column_config.TextColumn("Month"),
-                    "Transaction_Count": st.column_config.NumberColumn("Count", format="%d"),
-                    "Total_Amount": st.column_config.NumberColumn("Total Amount (₹)", format="₹%.2f")
-                }
-            )
-            st.bar_chart(bank["monthly_trend"].set_index("Month")["Total_Amount"])
-        
-        # Raw data table
-        st.markdown("### 📋 All Bank Transfer Transactions")
-        display_cols = ["Ticket ID", "Amount", "UTR NUMBER", "Status", "Date", "HUB", "City", "Reason"]
-        available_cols = [col for col in display_cols if col in bank["raw_data"].columns]
-        st.dataframe(
-            bank["raw_data"][available_cols],
-            use_container_width=True,
-            hide_index=True
-        )
-        
-        # Download button
-        csv = bank["raw_data"].to_csv(index=False)
-        st.download_button(
-            "📥 Download Bank Transfer Report",
-            data=csv,
-            file_name=f"bank_transfers_{current_year}.csv",
-            mime="text/csv"
-        )
-        
-    elif st.session_state.bank_data is not None and "error" in st.session_state.bank_data:
-        st.warning("⚠️ Could not load bank transfer data. Please check your secrets configuration.")
-        st.info("Add to secrets: `bank_transfer_sheet_id = '1QgGIeSgCSXSE_8CDosYWcAEF2NkA249Mv_EIafJrIj8'`")
-    elif st.session_state.bank_data is not None:
-        st.info("✅ No bank transfer data found for the current period")
 
 # ================= FOOTER =================
 st.markdown("---")
