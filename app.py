@@ -485,10 +485,10 @@ def get_bank_transfer_data(bank_df, ticket_id):
     if df.empty:
         return pd.DataFrame()
     
-    # Format for display
+    # Rename columns for better display
     rename_map = {
         "Ticket ID": "Ticket ID",
-        "Amount": "Amount (₹)",
+        "Amount": "Amount",
         "UTR NUMBER": "UTR Number",
         "Status": "Status",
         "Date": "Date",
@@ -511,6 +511,7 @@ def get_bank_transfer_data(bank_df, ticket_id):
     
     if date_col is not None:
         df["Date"] = pd.to_datetime(df[date_col], errors="coerce", dayfirst=True)
+        df["Date"] = df["Date"].dt.strftime("%d-%m-%Y")
     
     # Select and rename available columns
     available_cols = [col for col in rename_map.keys() if col in df.columns]
@@ -520,13 +521,14 @@ def get_bank_transfer_data(bank_df, ticket_id):
         if old in df_display.columns:
             df_display.rename(columns={old: new}, inplace=True)
     
-    # Format amount
-    if "Amount (₹)" in df_display.columns:
-        df_display["Amount (₹)"] = df_display["Amount (₹)"].apply(lambda x: f"₹{x:.2f}" if pd.notna(x) else "₹0.00")
-    
-    # Format date
-    if "Date" in df_display.columns and date_col is not None:
-        df_display["Date"] = df_display["Date"].dt.strftime("%d-%m-%Y")
+    # Format amount - handle numeric and string values
+    if "Amount" in df_display.columns:
+        # Convert to numeric, handling any format
+        df_display["Amount"] = pd.to_numeric(df_display["Amount"], errors="coerce")
+        # Format with ₹ symbol
+        df_display["Amount"] = df_display["Amount"].apply(lambda x: f"₹{x:.2f}" if pd.notna(x) else "₹0.00")
+        # Rename the column
+        df_display.rename(columns={"Amount": "Amount (₹)"}, inplace=True)
     
     return df_display
 
@@ -830,6 +832,7 @@ with tab2:
             
             total_amount = 0
             if "Amount (₹)" in bank_match.columns:
+                # Extract numeric values from strings like "₹1234.56"
                 total_amount = bank_match["Amount (₹)"].str.replace("₹", "").str.replace(",", "").astype(float).sum()
             
             col1, col2 = st.columns(2)
