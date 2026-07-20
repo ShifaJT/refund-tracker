@@ -379,13 +379,156 @@ def get_city_analysis(cash_df, jc_df, manual_df, year, current_month):
     
     return city_summary
 
+# ================= HUB ANALYSIS =================
+@st.cache_data(ttl=300)
+def get_hub_analysis(cash_df, jc_df, manual_df, year, current_month):
+    def prepare_hub_df(df):
+        if df.empty:
+            return pd.DataFrame(columns=["Hub", "Amount"])
+        
+        df = df.copy()
+        date_col = None
+        for col in ["Date", "date", "Timestamp", "timestamp"]:
+            if col in df.columns:
+                date_col = col
+                break
+        if date_col is None:
+            return pd.DataFrame(columns=["Hub", "Amount"])
+        
+        df["Date"] = pd.to_datetime(df[date_col], errors="coerce")
+        df = df[df["Date"].notna()]
+        df = df[(df["Date"].dt.year == year) & (df["Date"].dt.month <= current_month)]
+        if df.empty:
+            return pd.DataFrame(columns=["Hub", "Amount"])
+        
+        amount_col = None
+        for col in ["Amount", "amount", "Refund Amount"]:
+            if col in df.columns:
+                amount_col = col
+                break
+        if amount_col:
+            df["Amount"] = pd.to_numeric(df[amount_col], errors="coerce").fillna(0)
+        else:
+            df["Amount"] = 0
+        
+        hub_col = None
+        for col in ["Hub", "hub", "Hub ID", "HUB ID", "Hub Name"]:
+            if col in df.columns:
+                hub_col = col
+                break
+        
+        if hub_col:
+            df["Hub"] = df[hub_col].astype(str)
+        else:
+            df["Hub"] = "Unknown"
+        
+        return df[["Hub", "Amount"]]
+    
+    cash_hub = prepare_hub_df(cash_df)
+    jc_hub = prepare_hub_df(jc_df)
+    manual_hub = prepare_hub_df(manual_df)
+    
+    all_hub = pd.concat([cash_hub, jc_hub, manual_hub], ignore_index=True)
+    if all_hub.empty:
+        return pd.DataFrame()
+    
+    hub_summary = all_hub.groupby("Hub").agg(
+        Total_Amount=("Amount", "sum"),
+        Total_Instances=("Amount", "count")
+    ).reset_index().sort_values("Total_Amount", ascending=False)
+    
+    return hub_summary
+
+# ================= BANK TRANSFER ANALYSIS =================
+@st.cache_data(ttl=300)
+def get_bank_transfer_analysis(bank_df, year, current_month):
+    """Analyze bank transfer refund data"""
+    if bank_df.empty:
+        return pd.DataFrame()
+    
+    df = bank_df.copy()
+    
+    # Find Date column
+    date_col = None
+    for col in ["Date", "date", "Date"]:
+        if col in df.columns:
+            date_col = col
+            break
+    
+    if date_col is None:
+        return pd.DataFrame()
+    
+    # Convert date
+    df["Date"] = pd.to_datetime(df[date_col], errors="coerce", dayfirst=True)
+    df = df[df["Date"].notna()]
+    df = df[(df["Date"].dt.year == year) & (df["Date"].dt.month <= current_month)]
+    
+    if df.empty:
+        return pd.DataFrame()
+    
+    # Standardize city names
+    if "City" in df.columns:
+        df["City"] = df["City"].astype(str).apply(standardize_city_name)
+    
+    # Get summary metrics
+    summary = {
+        "Total_Transactions": len(df),
+        "Total_Amount": df["Amount"].sum() if "Amount" in df.columns else 0,
+        "Success_Count": len(df[df["Status"].str.lower() == "sucess"]) if "Status" in df.columns else 0,
+        "Unique_Hubs": df["HUB"].nunique() if "HUB" in df.columns else 0,
+        "Unique_Cities": df["City"].nunique() if "City" in df.columns else 0
+    }
+    
+    # Hub-wise breakdown
+    if "HUB" in df.columns:
+        hub_breakdown = df.groupby("HUB").agg(
+            Transaction_Count=("Amount", "count"),
+            Total_Amount=("Amount", "sum")
+        ).reset_index().sort_values("Total_Amount", ascending=False)
+    else:
+        hub_breakdown = pd.DataFrame()
+    
+    # City-wise breakdown
+    if "City" in df.columns:
+        city_breakdown = df.groupby("City").agg(
+            Transaction_Count=("Amount", "count"),
+            Total_Amount=("Amount", "sum")
+        ).reset_index().sort_values("Total_Amount", ascending=False)
+    else:
+        city_breakdown = pd.DataFrame()
+    
+    # Status breakdown
+    if "Status" in df.columns:
+        status_breakdown = df.groupby("Status").agg(
+            Transaction_Count=("Amount", "count"),
+            Total_Amount=("Amount", "sum")
+        ).reset_index()
+    else:
+        status_breakdown = pd.DataFrame()
+    
+    # Monthly trend
+    df["Month"] = df["Date"].dt.strftime("%B %Y")
+    monthly_trend = df.groupby("Month").agg(
+        Transaction_Count=("Amount", "count"),
+        Total_Amount=("Amount", "sum")
+    ).reset_index().sort_values("Month")
+    
+    return {
+        "summary": summary,
+        "hub_breakdown": hub_breakdown,
+        "city_breakdown": city_breakdown,
+        "status_breakdown": status_breakdown,
+        "monthly_trend": monthly_trend,
+        "raw_data": df
+    }
+
 # ================= REFRESH =================
 if st.button("🔄 Refresh Data"):
     st.cache_data.clear()
     st.rerun()
 
 # ================= TAB SELECTION =================
-tab1, tab2, tab3 = st.tabs(["🔍 Individual Search", "📊 High Risk Customers", "🏙️ City Analysis"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["🔍 Individual Search", "📊 High Risk Customers", "🏙️ City Analysis", "🏪 Hub Analysis", "🏦 Bank Transfers"])
 
 # ================= TAB 1: Individual Search =================
 with tab1:
@@ -707,6 +850,7 @@ with tab2:
 # ================= TAB 3: City Analysis =================
 with tab3:
     st.markdown("## 🏙️ City-wise Refund Analysis")
+    st.markdown("*City-wise refund amounts and instances (standardized city names)*")
     
     @st.cache_data(ttl=300)
     def load_city_data():
@@ -751,6 +895,182 @@ with tab3:
         
     elif st.session_state.city_data is not None:
         st.info("✅ No city data found!")
+
+# ================= TAB 4: Hub Analysis =================
+with tab4:
+    st.markdown("## 🏪 Hub-wise Refund Analysis")
+    st.markdown("*Hub-wise refund amounts and instances (original hub codes preserved)*")
+    
+    @st.cache_data(ttl=300)
+    def load_hub_data():
+        cash_df = load_sheet(st.secrets["cash_upi_sheet_id"], "Form Responses 1")
+        jc_df = load_sheet(st.secrets["jumbocash_sheet_id"], "Form Responses 1")
+        manual_df = load_sheet(st.secrets["cash_upi_sheet_id"], "cash refund")
+        return cash_df, jc_df, manual_df
+    
+    if 'hub_data' not in st.session_state:
+        st.session_state.hub_data = None
+    
+    if st.button("🔄 Load Hub Analysis"):
+        cash_df, jc_df, manual_df = load_hub_data()
+        with st.spinner("Analyzing hub data..."):
+            hub_data = get_hub_analysis(cash_df, jc_df, manual_df, current_year, current_month)
+            st.session_state.hub_data = hub_data
+    
+    if st.session_state.hub_data is not None and not st.session_state.hub_data.empty:
+        hub_df = st.session_state.hub_data
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Total Hubs", hub_df["Hub"].nunique())
+        with col2:
+            st.metric("Total Instances", hub_df["Total_Instances"].sum())
+        with col3:
+            st.metric("Total Amount", f"₹{hub_df['Total_Amount'].sum():,.2f}")
+        
+        st.dataframe(
+            hub_df,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Hub": st.column_config.TextColumn("Hub"),
+                "Total_Instances": st.column_config.NumberColumn("Total Instances", format="%d"),
+                "Total_Amount": st.column_config.NumberColumn("Total Amount (₹)", format="₹%.2f")
+            }
+        )
+        
+        st.markdown("### 🔝 Top Hubs by Refund Amount")
+        st.bar_chart(hub_df.set_index("Hub")["Total_Amount"].head(15))
+        
+    elif st.session_state.hub_data is not None:
+        st.info("✅ No hub data found!")
+
+# ================= TAB 5: Bank Transfers =================
+with tab5:
+    st.markdown("## 🏦 Bank Transfer Refunds (CD Refund Sheet)")
+    st.markdown("*Bank transfer refund transactions with UTR numbers and status*")
+    
+    # Add note about bank transfer sheet ID in secrets
+    st.info("📌 Make sure to add `bank_transfer_sheet_id` to your secrets with the sheet ID: `1QgGIeSgCSXSE_8CDosYWcAEF2NkA249Mv_EIafJrIj8`")
+    
+    @st.cache_data(ttl=300)
+    def load_bank_data():
+        try:
+            bank_df = load_sheet(st.secrets["bank_transfer_sheet_id"], "CD Refund Sheet")
+            return bank_df
+        except:
+            return pd.DataFrame()
+    
+    if 'bank_data' not in st.session_state:
+        st.session_state.bank_data = None
+    
+    if st.button("🔄 Load Bank Transfer Data"):
+        with st.spinner("Loading bank transfer data..."):
+            bank_df = load_bank_data()
+            if not bank_df.empty:
+                bank_analysis = get_bank_transfer_analysis(bank_df, current_year, current_month)
+                st.session_state.bank_data = bank_analysis
+            else:
+                st.session_state.bank_data = {"error": "No data found or sheet not accessible"}
+    
+    if st.session_state.bank_data is not None and "error" not in st.session_state.bank_data:
+        bank = st.session_state.bank_data
+        
+        # Summary metrics
+        col1, col2, col3, col4, col5 = st.columns(5)
+        with col1:
+            st.metric("Total Transactions", bank["summary"]["Total_Transactions"])
+        with col2:
+            st.metric("Total Amount", f"₹{bank['summary']['Total_Amount']:,.2f}")
+        with col3:
+            st.metric("Successful", bank["summary"]["Success_Count"])
+        with col4:
+            st.metric("Unique Hubs", bank["summary"]["Unique_Hubs"])
+        with col5:
+            st.metric("Unique Cities", bank["summary"]["Unique_Cities"])
+        
+        # Status breakdown
+        if not bank["status_breakdown"].empty:
+            st.markdown("### 📊 Status Breakdown")
+            st.dataframe(
+                bank["status_breakdown"],
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Status": st.column_config.TextColumn("Status"),
+                    "Transaction_Count": st.column_config.NumberColumn("Count", format="%d"),
+                    "Total_Amount": st.column_config.NumberColumn("Total Amount (₹)", format="₹%.2f")
+                }
+            )
+        
+        # Hub-wise breakdown
+        if not bank["hub_breakdown"].empty:
+            st.markdown("### 🏪 Hub-wise Bank Transfers")
+            st.dataframe(
+                bank["hub_breakdown"],
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "HUB": st.column_config.TextColumn("Hub"),
+                    "Transaction_Count": st.column_config.NumberColumn("Count", format="%d"),
+                    "Total_Amount": st.column_config.NumberColumn("Total Amount (₹)", format="₹%.2f")
+                }
+            )
+            st.bar_chart(bank["hub_breakdown"].set_index("HUB")["Total_Amount"].head(10))
+        
+        # City-wise breakdown
+        if not bank["city_breakdown"].empty:
+            st.markdown("### 🏙️ City-wise Bank Transfers")
+            st.dataframe(
+                bank["city_breakdown"],
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "City": st.column_config.TextColumn("City"),
+                    "Transaction_Count": st.column_config.NumberColumn("Count", format="%d"),
+                    "Total_Amount": st.column_config.NumberColumn("Total Amount (₹)", format="₹%.2f")
+                }
+            )
+        
+        # Monthly trend
+        if not bank["monthly_trend"].empty:
+            st.markdown("### 📈 Monthly Bank Transfer Trend")
+            st.dataframe(
+                bank["monthly_trend"],
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Month": st.column_config.TextColumn("Month"),
+                    "Transaction_Count": st.column_config.NumberColumn("Count", format="%d"),
+                    "Total_Amount": st.column_config.NumberColumn("Total Amount (₹)", format="₹%.2f")
+                }
+            )
+            st.bar_chart(bank["monthly_trend"].set_index("Month")["Total_Amount"])
+        
+        # Raw data table
+        st.markdown("### 📋 All Bank Transfer Transactions")
+        display_cols = ["Ticket ID", "Amount", "UTR NUMBER", "Status", "Date", "HUB", "City", "Reason"]
+        available_cols = [col for col in display_cols if col in bank["raw_data"].columns]
+        st.dataframe(
+            bank["raw_data"][available_cols],
+            use_container_width=True,
+            hide_index=True
+        )
+        
+        # Download button
+        csv = bank["raw_data"].to_csv(index=False)
+        st.download_button(
+            "📥 Download Bank Transfer Report",
+            data=csv,
+            file_name=f"bank_transfers_{current_year}.csv",
+            mime="text/csv"
+        )
+        
+    elif st.session_state.bank_data is not None and "error" in st.session_state.bank_data:
+        st.warning("⚠️ Could not load bank transfer data. Please check your secrets configuration.")
+        st.info("Add to secrets: `bank_transfer_sheet_id = '1QgGIeSgCSXSE_8CDosYWcAEF2NkA249Mv_EIafJrIj8'`")
+    elif st.session_state.bank_data is not None:
+        st.info("✅ No bank transfer data found for the current period")
 
 # ================= FOOTER =================
 st.markdown("---")
