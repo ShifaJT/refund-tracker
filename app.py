@@ -101,14 +101,24 @@ def fix_duplicate_columns(df):
 # ================= LOAD SHEETS =================
 @st.cache_data(ttl=300)
 def load_sheet(sheet_id, sheet_name):
-    client = get_client()
-    sheet = client.open_by_key(sheet_id)
-    ws = sheet.worksheet(sheet_name)
-    data = ws.get_all_values()
-    df = pd.DataFrame(data[1:], columns=data[0])
-    df.columns = df.columns.str.strip()
-    df = fix_duplicate_columns(df)
-    return df
+    try:
+        client = get_client()
+        sheet = client.open_by_key(sheet_id)
+        ws = sheet.worksheet(sheet_name)
+        data = ws.get_all_values()
+        df = pd.DataFrame(data[1:], columns=data[0])
+        df.columns = df.columns.str.strip()
+        df = fix_duplicate_columns(df)
+        return df
+    except gspread.exceptions.SpreadsheetNotFound:
+        st.error(f"❌ Spreadsheet not found! Please check:\n1. Sheet ID: {sheet_id}\n2. Service account has access to this sheet")
+        return pd.DataFrame()
+    except gspread.exceptions.WorksheetNotFound:
+        st.error(f"❌ Worksheet '{sheet_name}' not found in the spreadsheet!")
+        return pd.DataFrame()
+    except Exception as e:
+        st.error(f"❌ Error loading sheet: {str(e)}")
+        return pd.DataFrame()
 
 # ================= GET REFUND COUNT =================
 @st.cache_data(ttl=300)
@@ -748,6 +758,11 @@ with tab2:
     st.markdown("## 🏦 Bank Transfer Refund Details")
     st.markdown("*Search for a bank transfer refund by Ticket ID and view all details including UTR number, status, and transaction information*")
     
+    # Show sheet access status
+    st.info("📌 Sheet ID: `1QgGIeSgCSXSE_8CDosYWcAEF2NkA249Mv_EIafJrIj8`")
+    st.info("📌 Service Account: `refund-tracker-app@refund-tracker-app-492509.iam.gserviceaccount.com`")
+    st.info("📌 Make sure the service account has EDITOR access to the sheet")
+    
     ticket_id_input = st.text_input("Enter Ticket ID")
     
     if st.button("🔍 Search Bank Transfer"):
@@ -761,10 +776,21 @@ with tab2:
             # Load bank transfer data
             try:
                 bank_df = load_sheet(st.secrets["bank_transfer_sheet_id"], "CD Refund Sheet")
-            except:
-                bank_df = pd.DataFrame()
-                st.error("❌ Bank transfer sheet not accessible. Please check your secrets configuration.")
-                st.info("Make sure `bank_transfer_sheet_id` is set in your secrets.toml file")
+                if bank_df.empty:
+                    st.error("❌ No data found in the sheet. Please check:\n1. Sheet ID is correct\n2. Service account has access\n3. Sheet contains data")
+                    st.stop()
+            except Exception as e:
+                st.error(f"❌ Error loading bank transfer sheet: {str(e)}")
+                st.info("""
+                **To fix this issue:**
+                1. Open the Google Sheet: https://docs.google.com/spreadsheets/d/1QgGIeSgCSXSE_8CDosYWcAEF2NkA249Mv_EIafJrIj8/edit
+                2. Click the 'Share' button (top right)
+                3. Add this email as Editor:
+                   `refund-tracker-app@refund-tracker-app-492509.iam.gserviceaccount.com`
+                4. Click 'Send'
+                5. Wait 2-3 minutes for permissions to propagate
+                6. Refresh the app
+                """)
                 st.stop()
             
             # Search for ticket in bank transfer sheet
