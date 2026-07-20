@@ -1,4 +1,4 @@
-import streamlit as st
+	import streamlit as st
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
@@ -777,7 +777,8 @@ with tab2:
         **To fix this issue:**
         1. Go to your Streamlit Cloud app dashboard
         2. Click on 'Settings' → 'Secrets'
-        3. Add the following line:
+        3. Add the following line:bank_transfer_sheet_id = "1QgGIeSgCSXSE_8CDosYWcAEF2NkA249Mv_EIafJrIj8"
+
 4. Click 'Save' and the app will automatically redeploy
 """)
 st.stop()
