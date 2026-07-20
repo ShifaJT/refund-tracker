@@ -439,8 +439,8 @@ def get_hub_analysis(cash_df, jc_df, manual_df, year, current_month):
     
     return hub_summary
 
-# ================= TICKET SEARCH FUNCTION =================
-def search_ticket_by_id(bank_df, ticket_id):
+# ================= BANK TRANSFER DATA =================
+def get_bank_transfer_data(bank_df, ticket_id):
     """Search for a ticket by ID in bank transfer sheet"""
     if bank_df.empty:
         return pd.DataFrame()
@@ -514,7 +514,7 @@ if st.button("🔄 Refresh Data"):
     st.rerun()
 
 # ================= TAB SELECTION =================
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["🔍 Individual Search", "🎫 Ticket Search", "📊 High Risk Customers", "🏙️ City Analysis", "🏪 Hub Analysis"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["🔍 Individual Search", "🏦 Bank Transfer Refund Details", "📊 High Risk Customers", "🏙️ City Analysis", "🏪 Hub Analysis"])
 
 # ================= TAB 1: Individual Search =================
 with tab1:
@@ -743,14 +743,14 @@ with tab1:
         
         st.dataframe(monthly_df.style.apply(highlight_current, axis=1), use_container_width=True, hide_index=True)
 
-# ================= TAB 2: Ticket Search =================
+# ================= TAB 2: Bank Transfer Refund Details =================
 with tab2:
-    st.markdown("## 🎫 Ticket Search")
-    st.markdown("*Search for a refund ticket by Ticket ID and view all details including bank transfer information*")
+    st.markdown("## 🏦 Bank Transfer Refund Details")
+    st.markdown("*Search for a bank transfer refund by Ticket ID and view all details including UTR number, status, and transaction information*")
     
     ticket_id_input = st.text_input("Enter Ticket ID")
     
-    if st.button("🔍 Search Ticket"):
+    if st.button("🔍 Search Bank Transfer"):
         if not ticket_id_input:
             st.warning("Please enter a Ticket ID")
             st.stop()
@@ -758,121 +758,73 @@ with tab2:
         ticket_id = ticket_id_input.strip()
         
         with st.spinner(f"Searching for Ticket ID: {ticket_id}..."):
-            # Load all data
-            cash_df = load_sheet(st.secrets["cash_upi_sheet_id"], "Form Responses 1")
-            jc_df = load_sheet(st.secrets["jumbocash_sheet_id"], "Form Responses 1")
-            manual_df = load_sheet(st.secrets["cash_upi_sheet_id"], "cash refund")
-            
             # Load bank transfer data
             try:
                 bank_df = load_sheet(st.secrets["bank_transfer_sheet_id"], "CD Refund Sheet")
             except:
                 bank_df = pd.DataFrame()
-                st.warning("⚠️ Bank transfer sheet not accessible. Please check your secrets configuration.")
+                st.error("❌ Bank transfer sheet not accessible. Please check your secrets configuration.")
+                st.info("Make sure `bank_transfer_sheet_id` is set in your secrets.toml file")
+                st.stop()
             
-            # Search for ticket in all sheets
-            
-            # 1. Cash/UPI - search by Ticket Number
-            cash_match = pd.DataFrame()
-            if "Ticket Number" in cash_df.columns:
-                cash_match = cash_df[cash_df["Ticket Number"].astype(str).str.strip() == ticket_id]
-            
-            # 2. Jumbocash - search by Ticket ID
-            jc_match = pd.DataFrame()
-            if "Ticket ID" in jc_df.columns:
-                jc_match = jc_df[jc_df["Ticket ID"].astype(str).str.strip() == ticket_id]
-            
-            # 3. Manual Cash - search by Ticket No
-            manual_match = pd.DataFrame()
-            if "Ticket No" in manual_df.columns:
-                manual_match = manual_df[manual_df["Ticket No"].astype(str).str.strip() == ticket_id]
-            
-            # 4. Bank Transfer - search by Ticket ID
-            bank_match = search_ticket_by_id(bank_df, ticket_id)
+            # Search for ticket in bank transfer sheet
+            bank_match = get_bank_transfer_data(bank_df, ticket_id)
         
         # Display results
-        if cash_match.empty and jc_match.empty and manual_match.empty and bank_match.empty:
-            st.warning(f"No records found for Ticket ID: {ticket_id}")
+        if bank_match.empty:
+            st.warning(f"No bank transfer records found for Ticket ID: {ticket_id}")
         else:
-            st.success(f"Found records for Ticket ID: {ticket_id}")
+            st.success(f"✅ Found {len(bank_match)} bank transfer record(s) for Ticket ID: {ticket_id}")
             
-            # Display Bank Transfer details first (if found)
-            if not bank_match.empty:
-                st.markdown("---")
-                st.markdown("## 🏦 Bank Transfer Details")
-                
-                # Show as a nice card
-                for _, row in bank_match.iterrows():
-                    st.markdown(f"""
-                    <div style="background-color: #f8f9fa; padding: 15px; border-radius: 10px; margin: 10px 0; border: 1px solid #dee2e6;">
-                        <h4>💰 Bank Transfer Information</h4>
-                        <table style="width: 100%;">
-                            <tr><td><b>Ticket ID:</b></td><td>{row.get('Ticket ID', 'N/A')}</td></tr>
-                            <tr><td><b>Amount:</b></td><td>{row.get('Amount (₹)', 'N/A')}</td></tr>
-                            <tr><td><b>UTR Number:</b></td><td>{row.get('UTR Number', 'N/A')}</td></tr>
-                            <tr><td><b>Status:</b></td><td>{row.get('Status', 'N/A')}</td></tr>
-                            <tr><td><b>Date:</b></td><td>{row.get('Date', 'N/A')}</td></tr>
-                            <tr><td><b>Hub:</b></td><td>{row.get('Hub', 'N/A')}</td></tr>
-                            <tr><td><b>City:</b></td><td>{row.get('City', 'N/A')}</td></tr>
-                            <tr><td><b>Reason:</b></td><td>{row.get('Reason', 'N/A')}</td></tr>
-                            <tr><td><b>Phone Number:</b></td><td>{row.get('Phone Number', 'N/A')}</td></tr>
-                        </table>
-                    </div>
-                    """, unsafe_allow_html=True)
-                
-                # Also show as dataframe
-                st.dataframe(bank_match, use_container_width=True, hide_index=True)
+            # Display Bank Transfer details as a nice card
+            st.markdown("---")
+            st.markdown("## 📋 Bank Transfer Details")
             
-            # Display Cash/UPI details
-            if not cash_match.empty:
-                st.markdown("---")
-                st.markdown("## 💳 Cash/UPI Refund Details")
-                st.dataframe(cash_match, use_container_width=True, hide_index=True)
+            # Show as a nice card
+            for _, row in bank_match.iterrows():
+                st.markdown(f"""
+                <div style="background-color: #f8f9fa; padding: 20px; border-radius: 10px; margin: 10px 0; border: 1px solid #dee2e6;">
+                    <h4>💰 Bank Transfer Information</h4>
+                    <table style="width: 100%; border-collapse: collapse;">
+                        <tr><td style="padding: 8px; font-weight: bold; width: 40%;">Ticket ID:</td><td style="padding: 8px;">{row.get('Ticket ID', 'N/A')}</td></tr>
+                        <tr><td style="padding: 8px; font-weight: bold;">Amount:</td><td style="padding: 8px; color: #28a745; font-weight: bold;">{row.get('Amount (₹)', 'N/A')}</td></tr>
+                        <tr><td style="padding: 8px; font-weight: bold;">UTR Number:</td><td style="padding: 8px; font-family: monospace;">{row.get('UTR Number', 'N/A')}</td></tr>
+                        <tr><td style="padding: 8px; font-weight: bold;">Status:</td><td style="padding: 8px;">{row.get('Status', 'N/A')}</td></tr>
+                        <tr><td style="padding: 8px; font-weight: bold;">Date:</td><td style="padding: 8px;">{row.get('Date', 'N/A')}</td></tr>
+                        <tr><td style="padding: 8px; font-weight: bold;">Hub:</td><td style="padding: 8px;">{row.get('Hub', 'N/A')}</td></tr>
+                        <tr><td style="padding: 8px; font-weight: bold;">City:</td><td style="padding: 8px;">{row.get('City', 'N/A')}</td></tr>
+                        <tr><td style="padding: 8px; font-weight: bold;">Reason:</td><td style="padding: 8px;">{row.get('Reason', 'N/A')}</td></tr>
+                        <tr><td style="padding: 8px; font-weight: bold;">Phone Number:</td><td style="padding: 8px;">{row.get('Phone Number', 'N/A')}</td></tr>
+                    </table>
+                </div>
+                """, unsafe_allow_html=True)
             
-            # Display Jumbocash details
-            if not jc_match.empty:
-                st.markdown("---")
-                st.markdown("## 🏦 Jumbocash Refund Details")
-                st.dataframe(jc_match, use_container_width=True, hide_index=True)
+            # Also show as dataframe
+            st.markdown("### 📊 Data View")
+            st.dataframe(bank_match, use_container_width=True, hide_index=True)
             
-            # Display Manual Cash details
-            if not manual_match.empty:
-                st.markdown("---")
-                st.markdown("## 💵 Manual Cash Refund Details")
-                st.dataframe(manual_match, use_container_width=True, hide_index=True)
+            # Summary
+            st.markdown("---")
+            st.markdown("## 📊 Summary")
             
-            # Summary of all refunds for this ticket
             total_amount = 0
-            total_count = 0
+            if "Amount (₹)" in bank_match.columns:
+                total_amount = bank_match["Amount (₹)"].str.replace("₹", "").str.replace(",", "").astype(float).sum()
             
-            if not cash_match.empty and "Amount" in cash_match.columns:
-                total_amount += pd.to_numeric(cash_match["Amount"], errors="coerce").sum()
-                total_count += len(cash_match)
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("Total Records", len(bank_match))
+            with col2:
+                st.metric("Total Amount", f"₹{total_amount:,.2f}")
             
-            if not jc_match.empty and "Amount" in jc_match.columns:
-                total_amount += pd.to_numeric(jc_match["Amount"], errors="coerce").sum()
-                total_count += len(jc_match)
-            
-            if not manual_match.empty and "Amount" in manual_match.columns:
-                total_amount += pd.to_numeric(manual_match["Amount"], errors="coerce").sum()
-                total_count += len(manual_match)
-            
-            if not bank_match.empty and "Amount (₹)" in bank_match.columns:
-                bank_amount = bank_match["Amount (₹)"].str.replace("₹", "").str.replace(",", "").astype(float).sum()
-                total_amount += bank_amount
-                total_count += len(bank_match)
-            
-            if total_count > 0:
-                st.markdown("---")
-                st.markdown("## 📊 Summary")
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Total Refund Count", total_count)
-                with col2:
-                    st.metric("Total Refund Amount", f"₹{total_amount:,.2f}")
-                with col3:
-                    if total_count > 0:
-                        st.metric("Average Refund", f"₹{total_amount/total_count:,.2f}")
+            # Download button
+            csv = bank_match.to_csv(index=False)
+            st.download_button(
+                "📥 Download Bank Transfer Details",
+                data=csv,
+                file_name=f"bank_transfer_{ticket_id}.csv",
+                mime="text/csv"
+            )
 
 # ================= TAB 3: High Risk Customers =================
 with tab3:
