@@ -113,17 +113,86 @@ def load_sheet(sheet_id, sheet_name):
             available_sheets = [ws.title for ws in sheet.worksheets()]
             st.error(f"❌ Worksheet '{sheet_name}' not found!")
             st.info(f"📋 Available worksheets in this sheet: {', '.join(available_sheets)}")
-            return pd.DataFrame()
+            # Try to use the first available worksheet
+            if available_sheets:
+                st.info(f"💡 Trying to use '{available_sheets[0]}' instead...")
+                ws = sheet.worksheet(available_sheets[0])
+            else:
+                return pd.DataFrame()
         
+        # Get all values
         data = ws.get_all_values()
+        
         if len(data) <= 1:
             st.warning(f"⚠️ Worksheet '{sheet_name}' has no data (only headers or empty)")
             return pd.DataFrame()
-            
-        df = pd.DataFrame(data[1:], columns=data[0])
+        
+        # Find the header row (look for row with Ticket ID, Phone Number, etc.)
+        header_row_idx = None
+        for i, row in enumerate(data):
+            # Check if this row contains typical column headers
+            row_str = ' '.join(str(cell).lower() for cell in row if cell)
+            if 'ticket id' in row_str and 'phone number' in row_str and 'hub' in row_str:
+                header_row_idx = i
+                break
+        
+        if header_row_idx is None:
+            # If no header found, use first row as header
+            st.warning("⚠️ Could not find standard header row. Using first row as headers.")
+            header_row_idx = 0
+        
+        # Get headers from the identified header row
+        headers = [str(col).strip() if col else f"Column_{i}" for i, col in enumerate(data[header_row_idx])]
+        
+        # Get data rows (after header)
+        data_rows = data[header_row_idx + 1:]
+        
+        # Filter out empty rows and rows that are just numbers or text without data
+        data_rows = []
+        for row in data[header_row_idx + 1:]:
+            # Check if row has at least one non-empty cell
+            if any(cell for cell in row):
+                # Check if the row looks like actual data (has at least 3 non-empty cells)
+                non_empty = sum(1 for cell in row if cell and str(cell).strip())
+                if non_empty >= 3:
+                    data_rows.append(row)
+        
+        if not data_rows:
+            st.warning(f"⚠️ No data rows found in worksheet '{sheet_name}'")
+            return pd.DataFrame()
+        
+        # Ensure all rows have the same length as headers
+        max_len = len(headers)
+        for i, row in enumerate(data_rows):
+            if len(row) < max_len:
+                data_rows[i] = row + [''] * (max_len - len(row))
+            elif len(row) > max_len:
+                data_rows[i] = row[:max_len]
+        
+        # Create DataFrame
+        df = pd.DataFrame(data_rows, columns=headers)
+        
+        # Clean up column names
         df.columns = df.columns.str.strip()
+        
+        # Remove any rows where Ticket ID is empty or is a non-data value
+        ticket_col = None
+        for col in ["Ticket ID", "Ticket id", "Ticket Id", "ticket id", "Ticket Number", "Ticket No"]:
+            if col in df.columns:
+                ticket_col = col
+                break
+        
+        if ticket_col:
+            # Convert Ticket ID to string and filter out non-numeric or empty values
+            df[ticket_col] = df[ticket_col].astype(str).str.strip()
+            # Keep rows with numeric ticket IDs or those that look like ticket numbers
+            df = df[df[ticket_col].str.isnumeric() | df[ticket_col].str.match(r'^\d+$') | df[ticket_col].str.match(r'^[A-Za-z]\d+$')]
+        
+        # Fix duplicate columns
         df = fix_duplicate_columns(df)
+        
         return df
+        
     except gspread.exceptions.SpreadsheetNotFound:
         st.error(f"❌ Spreadsheet not found! Sheet ID: {sheet_id}")
         st.info("Please check if the sheet ID is correct and the service account has access.")
@@ -469,65 +538,68 @@ def get_bank_transfer_data(bank_df, ticket_id):
     
     df = bank_df.copy()
     
-    # Find Ticket ID column
+    # Find Ticket ID column (case insensitive)
     ticket_col = None
-    for col in ["Ticket ID", "Ticket id", "Ticket No", "Ticket Number"]:
-        if col in df.columns:
+    for col in df.columns:
+        if col and 'ticket' in col.lower() and ('id' in col.lower() or 'no' in col.lower()):
             ticket_col = col
             break
     
     if ticket_col is None:
+        st.warning("⚠️ Could not find Ticket ID column in bank transfer sheet")
+        st.info(f"📋 Available columns: {', '.join(df.columns)}")
         return pd.DataFrame()
     
     # Filter by ticket ID
-    df = df[df[ticket_col].astype(str).str.strip() == str(ticket_id).strip()]
+    df[ticket_col] = df[ticket_col].astype(str).str.strip()
+    ticket_id_str = str(ticket_id).strip()
+    df = df[df[ticket_col] == ticket_id_str]
     
     if df.empty:
         return pd.DataFrame()
     
-    # Rename columns for better display
-    rename_map = {
-        "Ticket ID": "Ticket ID",
-        "Amount": "Amount",
-        "UTR NUMBER": "UTR Number",
-        "Status": "Status",
-        "Date": "Date",
-        "HUB": "Hub",
-        "City": "City",
-        "Reason": "Reason",
-        "Phone Number": "Phone Number"
-    }
+    # Rename columns for better display - using case-insensitive matching
+    rename_map = {}
+    for col in df.columns:
+        col_lower = col.lower() if col else ''
+        if 'ticket' in col_lower and 'id' in col_lower:
+            rename_map[col] = "Ticket ID"
+        elif 'phone' in col_lower:
+            rename_map[col] = "Phone Number"
+        elif col_lower in ['hub', 'hub name']:
+            rename_map[col] = "Hub"
+        elif col_lower in ['city', 'city name']:
+            rename_map[col] = "City"
+        elif 'reason' in col_lower:
+            rename_map[col] = "Reason"
+        elif 'amount' in col_lower:
+            rename_map[col] = "Amount"
+        elif 'utr' in col_lower:
+            rename_map[col] = "UTR Number"
+        elif 'status' in col_lower:
+            rename_map[col] = "Status"
+        elif col_lower in ['date', 'date1']:
+            rename_map[col] = "Date"
+    
+    df = df.rename(columns=rename_map)
     
     # Standardize city names if City column exists
     if "City" in df.columns:
         df["City"] = df["City"].astype(str).apply(standardize_city_name)
     
     # Convert date if exists
-    date_col = None
-    for col in ["Date", "date"]:
-        if col in df.columns:
-            date_col = col
-            break
-    
-    if date_col is not None:
-        df["Date"] = pd.to_datetime(df[date_col], errors="coerce", dayfirst=True)
+    if "Date" in df.columns:
+        df["Date"] = pd.to_datetime(df["Date"], errors="coerce", dayfirst=True)
         df["Date"] = df["Date"].dt.strftime("%d-%m-%Y")
     
-    # Select and rename available columns
-    available_cols = [col for col in rename_map.keys() if col in df.columns]
-    df_display = df[available_cols].copy()
+    # Select only columns we want to display
+    display_cols = ["Ticket ID", "Phone Number", "Hub", "City", "Reason", "Amount", "UTR Number", "Status", "Date"]
+    df_display = df[[col for col in display_cols if col in df.columns]].copy()
     
-    for old, new in rename_map.items():
-        if old in df_display.columns:
-            df_display.rename(columns={old: new}, inplace=True)
-    
-    # Format amount - handle numeric and string values
+    # Format amount
     if "Amount" in df_display.columns:
-        # Convert to numeric, handling any format
         df_display["Amount"] = pd.to_numeric(df_display["Amount"], errors="coerce")
-        # Format with ₹ symbol
         df_display["Amount"] = df_display["Amount"].apply(lambda x: f"₹{x:.2f}" if pd.notna(x) else "₹0.00")
-        # Rename the column
         df_display.rename(columns={"Amount": "Amount (₹)"}, inplace=True)
     
     return df_display
@@ -810,14 +882,14 @@ with tab2:
                     <h4>💰 Bank Transfer Information</h4>
                     <table style="width: 100%; border-collapse: collapse;">
                         <tr><td style="padding: 8px; font-weight: bold; width: 40%;">Ticket ID:</td><td style="padding: 8px;">{row.get('Ticket ID', 'N/A')}</td></tr>
+                        <tr><td style="padding: 8px; font-weight: bold;">Phone Number:</td><td style="padding: 8px;">{row.get('Phone Number', 'N/A')}</td></tr>
+                        <tr><td style="padding: 8px; font-weight: bold;">Hub:</td><td style="padding: 8px;">{row.get('Hub', 'N/A')}</td></tr>
+                        <tr><td style="padding: 8px; font-weight: bold;">City:</td><td style="padding: 8px;">{row.get('City', 'N/A')}</td></tr>
+                        <tr><td style="padding: 8px; font-weight: bold;">Reason:</td><td style="padding: 8px;">{row.get('Reason', 'N/A')}</td></tr>
                         <tr><td style="padding: 8px; font-weight: bold;">Amount:</td><td style="padding: 8px; color: #28a745; font-weight: bold;">{row.get('Amount (₹)', 'N/A')}</td></tr>
                         <tr><td style="padding: 8px; font-weight: bold;">UTR Number:</td><td style="padding: 8px; font-family: monospace;">{row.get('UTR Number', 'N/A')}</td></tr>
                         <tr><td style="padding: 8px; font-weight: bold;">Status:</td><td style="padding: 8px; color: {status_color}; font-weight: bold;">{row.get('Status', 'N/A')}</td></tr>
                         <tr><td style="padding: 8px; font-weight: bold;">Date:</td><td style="padding: 8px;">{row.get('Date', 'N/A')}</td></tr>
-                        <tr><td style="padding: 8px; font-weight: bold;">Hub:</td><td style="padding: 8px;">{row.get('Hub', 'N/A')}</td></tr>
-                        <tr><td style="padding: 8px; font-weight: bold;">City:</td><td style="padding: 8px;">{row.get('City', 'N/A')}</td></tr>
-                        <tr><td style="padding: 8px; font-weight: bold;">Reason:</td><td style="padding: 8px;">{row.get('Reason', 'N/A')}</td></tr>
-                        <tr><td style="padding: 8px; font-weight: bold;">Phone Number:</td><td style="padding: 8px;">{row.get('Phone Number', 'N/A')}</td></tr>
                     </table>
                 </div>
                 """, unsafe_allow_html=True)
