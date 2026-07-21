@@ -337,8 +337,17 @@ def prepare_refund_df(df, source_name):
             if 'amount' in col.lower() or 'amt' in col.lower():
                 amount_col = col
                 break
+    
+    # Convert amount to numeric
     if amount_col:
-        df["Amount"] = pd.to_numeric(df[amount_col], errors="coerce").fillna(0)
+        try:
+            # Ensure the column exists and is a valid Series
+            if amount_col in df.columns:
+                df["Amount"] = pd.to_numeric(df[amount_col], errors="coerce").fillna(0)
+            else:
+                df["Amount"] = 0
+        except (TypeError, ValueError):
+            df["Amount"] = 0
     else:
         df["Amount"] = 0
     
@@ -544,9 +553,13 @@ def get_bank_transfer_data(bank_df, ticket_id):
     
     # Format amount
     if "Amount" in df_display.columns:
-        df_display["Amount"] = pd.to_numeric(df_display["Amount"], errors="coerce")
-        df_display["Amount"] = df_display["Amount"].apply(lambda x: f"₹{x:.2f}" if pd.notna(x) else "₹0.00")
-        df_display.rename(columns={"Amount": "Amount (₹)"}, inplace=True)
+        try:
+            df_display["Amount"] = pd.to_numeric(df_display["Amount"], errors="coerce")
+            df_display["Amount"] = df_display["Amount"].apply(lambda x: f"₹{x:.2f}" if pd.notna(x) else "₹0.00")
+            df_display.rename(columns={"Amount": "Amount (₹)"}, inplace=True)
+        except:
+            df_display["Amount"] = "₹0.00"
+            df_display.rename(columns={"Amount": "Amount (₹)"}, inplace=True)
     
     return df_display
 
@@ -851,7 +864,10 @@ with tab2:
             
             total_amount = 0
             if "Amount (₹)" in bank_match.columns:
-                total_amount = bank_match["Amount (₹)"].str.replace("₹", "").str.replace(",", "").astype(float).sum()
+                try:
+                    total_amount = bank_match["Amount (₹)"].str.replace("₹", "").str.replace(",", "").astype(float).sum()
+                except:
+                    total_amount = 0
             
             col1, col2 = st.columns(2)
             with col1:
