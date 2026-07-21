@@ -321,15 +321,21 @@ def prepare_refund_df(df, source_name):
     if date_col is not None and date_col in df.columns:
         try:
             df["Date"] = pd.to_datetime(df[date_col], errors="coerce")
-            if df["Date"].isna().all():
+            
+            # Check if all dates are NaT using a different approach
+            if df["Date"].isnull().all():
                 # Try with dayfirst=True for DD-MM-YYYY format
                 df["Date"] = pd.to_datetime(df[date_col], errors="coerce", dayfirst=True)
-        except Exception as e:
+        except Exception:
             # If conversion fails, use current date
             df["Date"] = pd.Timestamp.now()
         
-        # If all dates are NaT after conversion, use current date
-        if df["Date"].isna().all():
+        # Check again using .isnull() instead of .isna()
+        if "Date" in df.columns and df["Date"].isnull().all():
+            df["Date"] = pd.Timestamp.now()
+        
+        # Ensure we have a valid date column
+        if "Date" not in df.columns:
             df["Date"] = pd.Timestamp.now()
     else:
         # If no date column found, use current date
