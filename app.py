@@ -8,8 +8,8 @@ import re
 # ================= CONFIG =================
 st.set_page_config(page_title="Refund Tracker", layout="wide")
 
-st.title("ðŸ’° Refund Tracker")
-st.info("Rule: Less than 5 refunds â†’ APPROVE | 5 or more refunds â†’ DENY")
+st.title("💰 Refund Tracker")
+st.info("Rule: Less than 5 refunds → APPROVE | 5 or more refunds → DENY")
 
 # ================= CITY NAME STANDARDIZATION =================
 def standardize_city_name(city):
@@ -111,11 +111,11 @@ def load_sheet(sheet_id, sheet_name):
         except gspread.exceptions.WorksheetNotFound:
             # If worksheet not found, list all available worksheets
             available_sheets = [ws.title for ws in sheet.worksheets()]
-            st.error(f"âŒ Worksheet '{sheet_name}' not found!")
-            st.info(f"ðŸ“‹ Available worksheets in this sheet: {', '.join(available_sheets)}")
+            st.error(f"❌ Worksheet '{sheet_name}' not found!")
+            st.info(f"📋 Available worksheets in this sheet: {', '.join(available_sheets)}")
             # Try to use the first available worksheet
             if available_sheets:
-                st.info(f"ðŸ’¡ Trying to use '{available_sheets[0]}' instead...")
+                st.info(f"💡 Trying to use '{available_sheets[0]}' instead...")
                 ws = sheet.worksheet(available_sheets[0])
             else:
                 return pd.DataFrame()
@@ -124,7 +124,7 @@ def load_sheet(sheet_id, sheet_name):
         data = ws.get_all_values()
         
         if len(data) <= 1:
-            st.warning(f"âš ï¸ Worksheet '{sheet_name}' has no data (only headers or empty)")
+            st.warning(f"⚠️ Worksheet '{sheet_name}' has no data (only headers or empty)")
             return pd.DataFrame()
         
         # Find the header row - more flexible detection
@@ -163,7 +163,7 @@ def load_sheet(sheet_id, sheet_name):
                     data_rows.append(row)
         
         if not data_rows:
-            st.warning(f"âš ï¸ No data rows found in worksheet '{sheet_name}'")
+            st.warning(f"⚠️ No data rows found in worksheet '{sheet_name}'")
             return pd.DataFrame()
         
         # Ensure all rows have the same length as headers
@@ -213,8 +213,6 @@ def load_sheet(sheet_id, sheet_name):
                 rename_map[col] = 'BZID'
             elif 'approved by' in col_lower:
                 rename_map[col] = 'Approved By'
-            elif 'timestamp' in col_lower:
-                rename_map[col] = 'Date'
         
         # Apply renaming
         df = df.rename(columns=rename_map)
@@ -225,11 +223,11 @@ def load_sheet(sheet_id, sheet_name):
         return df
         
     except gspread.exceptions.SpreadsheetNotFound:
-        st.error(f"âŒ Spreadsheet not found! Sheet ID: {sheet_id}")
+        st.error(f"❌ Spreadsheet not found! Sheet ID: {sheet_id}")
         st.info("Please check if the sheet ID is correct and the service account has access.")
         return pd.DataFrame()
     except Exception as e:
-        st.error(f"âŒ Error loading sheet: {str(e)}")
+        st.error(f"❌ Error loading sheet: {str(e)}")
         return pd.DataFrame()
 
 # ================= GET REFUND COUNT =================
@@ -319,25 +317,23 @@ def prepare_refund_df(df, source_name):
                 date_col = col
                 break
     
-    if date_col is None:
-        # If no date column, create a default date (today)
-        df["Date"] = pd.Timestamp.now()
-    else:
-        # Convert date - handle different formats
+    # If we found a date column, try to convert it
+    if date_col is not None and date_col in df.columns:
         try:
             df["Date"] = pd.to_datetime(df[date_col], errors="coerce")
             if df["Date"].isna().all():
                 # Try with dayfirst=True for DD-MM-YYYY format
                 df["Date"] = pd.to_datetime(df[date_col], errors="coerce", dayfirst=True)
-        except:
-            try:
-                df["Date"] = pd.to_datetime(df[date_col], errors="coerce", infer_datetime_format=True)
-            except:
-                df["Date"] = pd.Timestamp.now()
+        except Exception as e:
+            # If conversion fails, use current date
+            df["Date"] = pd.Timestamp.now()
         
-        # If all dates are NaT, use current date
+        # If all dates are NaT after conversion, use current date
         if df["Date"].isna().all():
             df["Date"] = pd.Timestamp.now()
+    else:
+        # If no date column found, use current date
+        df["Date"] = pd.Timestamp.now()
     
     # Find Amount column
     amount_col = None
@@ -463,11 +459,11 @@ def get_high_risk_customers_optimized(all_refunds_df, year, current_month):
         frequent_user = months_with_refunds >= 4
         
         if (total_amount > 500 and avg_refunds >= 3) or consistent_defaulter or has_policy_breach:
-            risk_level = "ðŸ”´ðŸ”´ EXTREME"
+            risk_level = "🔴🔴 EXTREME"
         elif total_amount <= 500 and avg_refunds >= 3:
-            risk_level = "ðŸ”´ HIGH"
+            risk_level = "🔴 HIGH"
         elif avg_refunds >= 2 or months_with_refunds >= 3 or frequent_user:
-            risk_level = "ðŸŸ¡ POTENTIAL"
+            risk_level = "🟡 POTENTIAL"
         else:
             continue
         
@@ -475,11 +471,11 @@ def get_high_risk_customers_optimized(all_refunds_df, year, current_month):
         for i, (count, amount) in enumerate(zip(monthly_counts, monthly_amounts)):
             if i < current_month:
                 if count > 0:
-                    monthly_breakdown[month_abbr[i]] = f"{int(count)} [â‚¹{amount:.0f}]"
+                    monthly_breakdown[month_abbr[i]] = f"{int(count)} [₹{amount:.0f}]"
                 else:
                     monthly_breakdown[month_abbr[i]] = "0"
         
-        activity_status = "ðŸ”´ Active" if active_in_last_3 else "â¸ï¸ Inactive"
+        activity_status = "🔴 Active" if active_in_last_3 else "⏸️ Inactive"
         
         results.append({
             "BZID": bzid,
@@ -515,8 +511,8 @@ def get_bank_transfer_data(bank_df, ticket_id):
             break
     
     if ticket_col is None:
-        st.warning("âš ï¸ Could not find Ticket ID column in bank transfer sheet")
-        st.info(f"ðŸ“‹ Available columns: {', '.join(df.columns)}")
+        st.warning("⚠️ Could not find Ticket ID column in bank transfer sheet")
+        st.info(f"📋 Available columns: {', '.join(df.columns)}")
         return pd.DataFrame()
     
     # Filter by ticket ID
@@ -571,21 +567,21 @@ def get_bank_transfer_data(bank_df, ticket_id):
     if "Amount" in df_display.columns:
         try:
             df_display["Amount"] = pd.to_numeric(df_display["Amount"], errors="coerce")
-            df_display["Amount"] = df_display["Amount"].apply(lambda x: f"â‚¹{x:.2f}" if pd.notna(x) else "â‚¹0.00")
-            df_display.rename(columns={"Amount": "Amount (â‚¹)"}, inplace=True)
+            df_display["Amount"] = df_display["Amount"].apply(lambda x: f"₹{x:.2f}" if pd.notna(x) else "₹0.00")
+            df_display.rename(columns={"Amount": "Amount (₹)"}, inplace=True)
         except:
-            df_display["Amount"] = "â‚¹0.00"
-            df_display.rename(columns={"Amount": "Amount (â‚¹)"}, inplace=True)
+            df_display["Amount"] = "₹0.00"
+            df_display.rename(columns={"Amount": "Amount (₹)"}, inplace=True)
     
     return df_display
 
 # ================= REFRESH =================
-if st.button("ðŸ”„ Refresh Data"):
+if st.button("🔄 Refresh Data"):
     st.cache_data.clear()
     st.rerun()
 
 # ================= TAB SELECTION =================
-tab1, tab2, tab3 = st.tabs(["ðŸ” Individual Search", "ðŸ¦ Bank Transfer Refund Details", "ðŸ“Š High Risk Customers"])
+tab1, tab2, tab3 = st.tabs(["🔍 Individual Search", "🏦 Bank Transfer Refund Details", "📊 High Risk Customers"])
 
 # ================= TAB 1: Individual Search =================
 with tab1:
@@ -684,13 +680,13 @@ with tab1:
         col_left, col_right = st.columns([1, 1])
         
         with col_left:
-            st.markdown(f"## ðŸ“Š Current Month")
+            st.markdown(f"## 📊 Current Month")
             st.markdown(f"### {selected_month_label}")
             
             if total_count < 5:
                 st.markdown(f"""
                 <div class="decision-approve">
-                    <div class="decision-icon tick-mark">âœ…</div>
+                    <div class="decision-icon tick-mark">✅</div>
                     <div class="decision-text">
                         <h2 style="color: #28a745; margin: 0;">APPROVED</h2>
                         <p style="font-size: 18px; margin: 5px 0;">Total Refunds: {total_count} (Less than 5)</p>
@@ -700,7 +696,7 @@ with tab1:
             else:
                 st.markdown(f"""
                 <div class="decision-deny">
-                    <div class="decision-icon cross-mark">âŒ</div>
+                    <div class="decision-icon cross-mark">❌</div>
                     <div class="decision-text">
                         <h2 style="color: #dc3545; margin: 0;">DENIED</h2>
                         <p style="font-size: 18px; margin: 5px 0;">Total Refunds: {total_count} (5 or more - Limit reached)</p>
@@ -711,16 +707,16 @@ with tab1:
             if total_count >= 5:
                 st.markdown("""
                 <div style="text-align: center; padding: 10px; background-color: #f8d7da; border-radius: 10px; margin-top: 10px;">
-                    <span style="font-size: 32px;">ðŸš¶</span>
-                    <span style="font-size: 24px; margin-left: 10px;">âŒ</span>
+                    <span style="font-size: 32px;">🚶</span>
+                    <span style="font-size: 24px; margin-left: 10px;">❌</span>
                     <p style="margin: 5px 0 0 0; font-size: 14px; color: #721c24;">Limit reached! Walk away from this request.</p>
                 </div>
                 """, unsafe_allow_html=True)
             else:
                 st.markdown("""
                 <div style="text-align: center; padding: 10px; background-color: #d4edda; border-radius: 10px; margin-top: 10px;">
-                    <span style="font-size: 32px;">âœ…</span>
-                    <span style="font-size: 24px; margin-left: 10px;">ðŸ‘</span>
+                    <span style="font-size: 32px;">✅</span>
+                    <span style="font-size: 24px; margin-left: 10px;">👍</span>
                     <p style="margin: 5px 0 0 0; font-size: 14px; color: #155724;">All good! Proceed with the refund.</p>
                 </div>
                 """, unsafe_allow_html=True)
@@ -728,19 +724,19 @@ with tab1:
             # Metrics with 3 columns
             c1, c2, c3 = st.columns(3)
             with c1:
-                st.metric("ðŸ’³ Cash / UPI", cash_count, f"â‚¹{round(cash_amount, 2)}")
-                st.metric("ðŸ’µ Manual Cash", manual_count, f"â‚¹{round(manual_amount, 2)}")
+                st.metric("💳 Cash / UPI", cash_count, f"₹{round(cash_amount, 2)}")
+                st.metric("💵 Manual Cash", manual_count, f"₹{round(manual_amount, 2)}")
             with c2:
-                st.metric("ðŸ¦ Jumbocash", jc_count, f"â‚¹{round(jc_amount, 2)}")
-                st.metric("ðŸ¦ Bank Transfer", bank_count, f"â‚¹{round(bank_amount, 2)}")
+                st.metric("🏦 Jumbocash", jc_count, f"₹{round(jc_amount, 2)}")
+                st.metric("🏦 Bank Transfer", bank_count, f"₹{round(bank_amount, 2)}")
             with c3:
-                st.metric("ðŸ“¦ Total", total_count, f"â‚¹{round(total_amount, 2)}")
+                st.metric("📦 Total", total_count, f"₹{round(total_amount, 2)}")
         
         with col_right:
-            st.markdown(f"## ðŸ“‹ Refund Details")
+            st.markdown(f"## 📋 Refund Details")
             st.markdown(f"### {selected_month_label}")
             
-            tabs_inner = st.tabs(["ðŸ’³ Cash/UPI", "ðŸ¦ Jumbocash", "ðŸ’µ Manual Cash", "ðŸ¦ Bank Transfer"])
+            tabs_inner = st.tabs(["💳 Cash/UPI", "🏦 Jumbocash", "💵 Manual Cash", "🏦 Bank Transfer"])
             
             with tabs_inner[0]:
                 if not cash_details.empty:
@@ -768,7 +764,7 @@ with tab1:
         
         # YEARLY TREND
         st.markdown("---")
-        st.markdown(f"## ðŸ“ˆ Yearly Refund Trend (Jan - {datetime(current_year, current_month, 1).strftime('%B')})")
+        st.markdown(f"## 📈 Yearly Refund Trend (Jan - {datetime(current_year, current_month, 1).strftime('%B')})")
         
         col1, col2, col3 = st.columns([1, 1, 2])
         with col1:
@@ -794,7 +790,7 @@ with tab1:
         with col3:
             if last_year_count > 0:
                 change = ((current_year_count - last_year_count) / last_year_count) * 100
-                direction = "ðŸ“ˆ" if change > 0 else "ðŸ“‰" if change < 0 else "âž¡ï¸"
+                direction = "📈" if change > 0 else "📉" if change < 0 else "➡️"
                 change_text = f"{direction} {abs(change):.1f}%"
             else:
                 change_text = "New data" if current_year_count > 0 else "No data"
@@ -808,20 +804,20 @@ with tab1:
             """, unsafe_allow_html=True)
         
         # Monthly breakdown
-        st.markdown("### ðŸ“… Monthly Breakdown")
+        st.markdown("### 📅 Monthly Breakdown")
         monthly_data = []
         for i, month in enumerate(month_names):
-            status = "ðŸ“ Current" if i == month_input - 1 else ""
+            status = "📍 Current" if i == month_input - 1 else ""
             if selected_year == current_year and i >= current_month:
-                status = "â³ Future" if status != "ðŸ“ Current" else status
+                status = "⏳ Future" if status != "📍 Current" else status
             monthly_data.append({"Month": month, "Refunds": monthly_counts[i], "Status": status})
         
         monthly_df = pd.DataFrame(monthly_data)
         
         def highlight_current(row):
-            if row['Status'] == 'ðŸ“ Current':
+            if row['Status'] == '📍 Current':
                 return ['background-color: #e3f2fd'] * len(row)
-            elif row['Status'] == 'â³ Future':
+            elif row['Status'] == '⏳ Future':
                 return ['background-color: #f5f5f5; color: #999'] * len(row)
             return [''] * len(row)
         
@@ -829,12 +825,12 @@ with tab1:
 
 # ================= TAB 2: Bank Transfer Refund Details (CD Refund Sheet) =================
 with tab2:
-    st.markdown("## ðŸ¦ Bank Transfer Refund Details")
+    st.markdown("## 🏦 Bank Transfer Refund Details")
     st.markdown("*Search for a bank transfer refund by Ticket ID and view all details including UTR number, status, and transaction information*")
     
     ticket_id_input = st.text_input("Enter Ticket ID")
     
-    if st.button("ðŸ” Search Bank Transfer"):
+    if st.button("🔍 Search Bank Transfer"):
         if not ticket_id_input:
             st.warning("Please enter a Ticket ID")
             st.stop()
@@ -846,7 +842,7 @@ with tab2:
             bank_df = load_sheet(st.secrets["bank_transfer_sheet_id"], "CD Refund Sheet")
             
             if bank_df.empty:
-                st.warning("âš ï¸ No data found in the bank transfer sheet. Please check if the sheet has data.")
+                st.warning("⚠️ No data found in the bank transfer sheet. Please check if the sheet has data.")
                 st.stop()
             
             # Search for ticket in bank transfer sheet
@@ -856,25 +852,25 @@ with tab2:
         if bank_match.empty:
             st.warning(f"No bank transfer records found for Ticket ID: {ticket_id}")
         else:
-            st.success(f"âœ… Found {len(bank_match)} bank transfer record(s) for Ticket ID: {ticket_id}")
+            st.success(f"✅ Found {len(bank_match)} bank transfer record(s) for Ticket ID: {ticket_id}")
             
             # Display Bank Transfer details as a nice card
             st.markdown("---")
-            st.markdown("## ðŸ“‹ Bank Transfer Details")
+            st.markdown("## 📋 Bank Transfer Details")
             
             # Show as a nice card
             for _, row in bank_match.iterrows():
                 status_color = "#28a745" if str(row.get('Status', '')).lower() == "success" else "#dc3545"
                 st.markdown(f"""
                 <div style="background-color: #f8f9fa; padding: 20px; border-radius: 10px; margin: 10px 0; border: 1px solid #dee2e6;">
-                    <h4>ðŸ’° Bank Transfer Information</h4>
+                    <h4>💰 Bank Transfer Information</h4>
                     <table style="width: 100%; border-collapse: collapse;">
                         <tr><td style="padding: 8px; font-weight: bold; width: 40%;">Ticket ID:</td><td style="padding: 8px;">{row.get('Ticket ID', 'N/A')}</td></tr>
                         <tr><td style="padding: 8px; font-weight: bold;">Phone Number:</td><td style="padding: 8px;">{row.get('Phone Number', 'N/A')}</td></tr>
                         <tr><td style="padding: 8px; font-weight: bold;">Hub:</td><td style="padding: 8px;">{row.get('Hub', 'N/A')}</td></tr>
                         <tr><td style="padding: 8px; font-weight: bold;">City:</td><td style="padding: 8px;">{row.get('City', 'N/A')}</td></tr>
                         <tr><td style="padding: 8px; font-weight: bold;">Reason:</td><td style="padding: 8px;">{row.get('Reason', 'N/A')}</td></tr>
-                        <tr><td style="padding: 8px; font-weight: bold;">Amount:</td><td style="padding: 8px; color: #28a745; font-weight: bold;">{row.get('Amount (â‚¹)', 'N/A')}</td></tr>
+                        <tr><td style="padding: 8px; font-weight: bold;">Amount:</td><td style="padding: 8px; color: #28a745; font-weight: bold;">{row.get('Amount (₹)', 'N/A')}</td></tr>
                         <tr><td style="padding: 8px; font-weight: bold;">UTR Number:</td><td style="padding: 8px; font-family: monospace;">{row.get('UTR Number', 'N/A')}</td></tr>
                         <tr><td style="padding: 8px; font-weight: bold;">Status:</td><td style="padding: 8px; color: {status_color}; font-weight: bold;">{row.get('Status', 'N/A')}</td></tr>
                         <tr><td style="padding: 8px; font-weight: bold;">Date:</td><td style="padding: 8px;">{row.get('Date', 'N/A')}</td></tr>
@@ -884,17 +880,17 @@ with tab2:
                 """, unsafe_allow_html=True)
             
             # Also show as dataframe
-            st.markdown("### ðŸ“Š Data View")
+            st.markdown("### 📊 Data View")
             st.dataframe(bank_match, use_container_width=True, hide_index=True)
             
             # Summary
             st.markdown("---")
-            st.markdown("## ðŸ“Š Summary")
+            st.markdown("## 📊 Summary")
             
             total_amount = 0
-            if "Amount (â‚¹)" in bank_match.columns:
+            if "Amount (₹)" in bank_match.columns:
                 try:
-                    total_amount = bank_match["Amount (â‚¹)"].str.replace("â‚¹", "").str.replace(",", "").astype(float).sum()
+                    total_amount = bank_match["Amount (₹)"].str.replace("₹", "").str.replace(",", "").astype(float).sum()
                 except:
                     total_amount = 0
             
@@ -902,12 +898,12 @@ with tab2:
             with col1:
                 st.metric("Total Records", len(bank_match))
             with col2:
-                st.metric("Total Amount", f"â‚¹{total_amount:,.2f}")
+                st.metric("Total Amount", f"₹{total_amount:,.2f}")
             
             # Download button
             csv = bank_match.to_csv(index=False)
             st.download_button(
-                "ðŸ“¥ Download Bank Transfer Details",
+                "📥 Download Bank Transfer Details",
                 data=csv,
                 file_name=f"bank_transfer_{ticket_id}.csv",
                 mime="text/csv"
@@ -915,14 +911,14 @@ with tab2:
 
 # ================= TAB 3: High Risk Customers =================
 with tab3:
-    st.markdown("## ðŸš¨ High Risk Customers")
+    st.markdown("## 🚨 High Risk Customers")
     
     st.markdown("""
     <div class="info-box">
-        <b>ðŸ“– Risk Assessment:</b><br>
-        ðŸ”´ðŸ”´ EXTREME: (Amount > â‚¹500 AND Avg >= 3) OR (4+ refunds EVERY month) OR (5+ refunds in ANY month)<br>
-        ðŸ”´ HIGH: Amount <= â‚¹500 AND Avg >= 3<br>
-        ðŸŸ¡ POTENTIAL: Avg >= 2 OR Active in 3+ months OR Refunds in 4+ months
+        <b>📖 Risk Assessment:</b><br>
+        🔴🔴 EXTREME: (Amount > ₹500 AND Avg >= 3) OR (4+ refunds EVERY month) OR (5+ refunds in ANY month)<br>
+        🔴 HIGH: Amount <= ₹500 AND Avg >= 3<br>
+        🟡 POTENTIAL: Avg >= 2 OR Active in 3+ months OR Refunds in 4+ months
     </div>
     """, unsafe_allow_html=True)
     
@@ -961,7 +957,7 @@ with tab3:
     if 'high_risk_data' not in st.session_state:
         st.session_state.high_risk_data = None
     
-    if st.button("ðŸ”„ Load High Risk Customers"):
+    if st.button("🔄 Load High Risk Customers"):
         with st.spinner("Analyzing customer data..."):
             all_refunds = load_all_data()
             high_risk_df = get_high_risk_customers_optimized(all_refunds, current_year, current_month)
@@ -969,7 +965,7 @@ with tab3:
     
     if st.session_state.high_risk_data is not None and not st.session_state.high_risk_data.empty:
         high_risk_df = st.session_state.high_risk_data
-        risk_order = {"ðŸ”´ðŸ”´ EXTREME": 0, "ðŸ”´ HIGH": 1, "ðŸŸ¡ POTENTIAL": 2}
+        risk_order = {"🔴🔴 EXTREME": 0, "🔴 HIGH": 1, "🟡 POTENTIAL": 2}
         high_risk_df["Risk_Order"] = high_risk_df["Risk Level"].map(risk_order)
         high_risk_df = high_risk_df.sort_values(["Risk_Order", "Total Amount"], ascending=[True, False])
         high_risk_df = high_risk_df.drop(columns=["Risk_Order"])
@@ -980,13 +976,13 @@ with tab3:
         with col1:
             st.metric("Total High Risk", len(high_risk_df))
         with col2:
-            st.metric("ðŸ”´ðŸ”´ Extreme", len(high_risk_df[high_risk_df["Risk Level"] == "ðŸ”´ðŸ”´ EXTREME"]))
+            st.metric("🔴🔴 Extreme", len(high_risk_df[high_risk_df["Risk Level"] == "🔴🔴 EXTREME"]))
         with col3:
-            st.metric("ðŸ”´ High", len(high_risk_df[high_risk_df["Risk Level"] == "ðŸ”´ HIGH"]))
+            st.metric("🔴 High", len(high_risk_df[high_risk_df["Risk Level"] == "🔴 HIGH"]))
         with col4:
-            st.metric("ðŸŸ¡ Potential", len(high_risk_df[high_risk_df["Risk Level"] == "ðŸŸ¡ POTENTIAL"]))
+            st.metric("🟡 Potential", len(high_risk_df[high_risk_df["Risk Level"] == "🟡 POTENTIAL"]))
         with col5:
-            st.metric("Total Amount", f"â‚¹{high_risk_df['Total Amount'].sum():,.2f}")
+            st.metric("Total Amount", f"₹{high_risk_df['Total Amount'].sum():,.2f}")
         with col6:
             st.metric("Total Refunds", high_risk_df['Total Refunds'].sum())
         
@@ -1000,11 +996,11 @@ with tab3:
             "Monthly Average": st.column_config.NumberColumn("Avg/Month", format="%.2f"),
             "Months Active": st.column_config.NumberColumn("Months Active", format="%d"),
             "Max Monthly Refunds": st.column_config.NumberColumn("Max/Month", format="%d"),
-            "Total Amount": st.column_config.NumberColumn("Total Amount (â‚¹)", format="â‚¹%.2f"),
-            "Cash_UPI": st.column_config.NumberColumn("Cash/UPI (â‚¹)", format="â‚¹%.2f"),
-            "Jumbocash": st.column_config.NumberColumn("Jumbocash (â‚¹)", format="â‚¹%.2f"),
-            "Manual_Cash": st.column_config.NumberColumn("Manual Cash (â‚¹)", format="â‚¹%.2f"),
-            "Bank_Transfer": st.column_config.NumberColumn("Bank Transfer (â‚¹)", format="â‚¹%.2f"),
+            "Total Amount": st.column_config.NumberColumn("Total Amount (₹)", format="₹%.2f"),
+            "Cash_UPI": st.column_config.NumberColumn("Cash/UPI (₹)", format="₹%.2f"),
+            "Jumbocash": st.column_config.NumberColumn("Jumbocash (₹)", format="₹%.2f"),
+            "Manual_Cash": st.column_config.NumberColumn("Manual Cash (₹)", format="₹%.2f"),
+            "Bank_Transfer": st.column_config.NumberColumn("Bank Transfer (₹)", format="₹%.2f"),
         }
         for month in month_abbr:
             column_config[month] = st.column_config.TextColumn(month)
@@ -1027,11 +1023,11 @@ with tab3:
         )
         
         csv = high_risk_df.to_csv(index=False)
-        st.download_button("ðŸ“¥ Download Report", data=csv, file_name=f"high_risk_customers_{current_year}.csv", mime="text/csv")
+        st.download_button("📥 Download Report", data=csv, file_name=f"high_risk_customers_{current_year}.csv", mime="text/csv")
         
     elif st.session_state.high_risk_data is not None:
-        st.info("âœ… No high-risk customers found!")
+        st.info("✅ No high-risk customers found!")
 
 # ================= FOOTER =================
 st.markdown("---")
-st.caption("ðŸ’° Refund Tracker | Made with â¤ï¸")
+st.caption("💰 Refund Tracker | Made with ❤️")
