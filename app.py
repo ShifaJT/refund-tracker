@@ -304,42 +304,56 @@ def prepare_refund_df(df, source_name):
     
     df["BZID"] = df[bzid_col].astype(str).str.strip().str.upper()
     
-    # Find Date column - look for Timestamp or Date
+    # Find Date column - check for Timestamp or Date
     date_col = None
     for col in ["Date", "date", "Timestamp", "timestamp"]:
         if col in df.columns:
             date_col = col
             break
     if date_col is None:
-        # Try to find any column with date in name
+        # Try to find any column with date or timestamp in name
         for col in df.columns:
             if 'date' in col.lower() or 'timestamp' in col.lower():
                 date_col = col
                 break
     
-    # If we found a date column, try to convert it
+    # If we found a date/timestamp column, try to convert it
     if date_col is not None and date_col in df.columns:
         try:
+            # First try to convert as is
             df["Date"] = pd.to_datetime(df[date_col], errors="coerce")
             
-            # Check if all dates are NaT using a different approach
+            # If all are NaT, try with dayfirst=True
             if df["Date"].isnull().all():
-                # Try with dayfirst=True for DD-MM-YYYY format
                 df["Date"] = pd.to_datetime(df[date_col], errors="coerce", dayfirst=True)
+            
+            # If still all NaT, try with infer_datetime_format
+            if df["Date"].isnull().all():
+                df["Date"] = pd.to_datetime(df[date_col], errors="coerce", infer_datetime_format=True)
+                
         except Exception:
             # If conversion fails, use current date
             df["Date"] = pd.Timestamp.now()
         
-        # Check again using .isnull() instead of .isna()
+        # Final check - if all dates are NaT, use current date
         if "Date" in df.columns and df["Date"].isnull().all():
             df["Date"] = pd.Timestamp.now()
-        
-        # Ensure we have a valid date column
-        if "Date" not in df.columns:
-            df["Date"] = pd.Timestamp.now()
+            
     else:
         # If no date column found, use current date
         df["Date"] = pd.Timestamp.now()
+    
+    # Ensure Date column exists and has valid values
+    if "Date" not in df.columns:
+        df["Date"] = pd.Timestamp.now()
+    
+    # Convert to datetime if not already
+    if not pd.api.types.is_datetime64_any_dtype(df["Date"]):
+        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+    
+    # If any NaT values remain, fill with current date
+    if df["Date"].isnull().any():
+        df["Date"] = df["Date"].fillna(pd.Timestamp.now())
     
     # Find Amount column
     amount_col = None
