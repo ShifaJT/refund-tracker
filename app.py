@@ -317,41 +317,53 @@ def prepare_refund_df(df, source_name):
                 date_col = col
                 break
     
-    # If we found a date/timestamp column, try to convert it
+    # Handle date conversion safely
     if date_col is not None and date_col in df.columns:
-        try:
-            # First try to convert as is
-            df["Date"] = pd.to_datetime(df[date_col], errors="coerce")
-            
-            # If all are NaT, try with dayfirst=True
-            if df["Date"].isnull().all():
-                df["Date"] = pd.to_datetime(df[date_col], errors="coerce", dayfirst=True)
-            
-            # If still all NaT, try with infer_datetime_format
-            if df["Date"].isnull().all():
-                df["Date"] = pd.to_datetime(df[date_col], errors="coerce", infer_datetime_format=True)
-                
-        except Exception:
-            # If conversion fails, use current date
-            df["Date"] = pd.Timestamp.now()
+        # Try multiple date formats
+        date_parsed = False
         
-        # Final check - if all dates are NaT, use current date
-        if "Date" in df.columns and df["Date"].isnull().all():
+        # First try: standard conversion
+        try:
+            df["Date"] = pd.to_datetime(df[date_col], errors="coerce")
+            # Check if we have any valid dates
+            if not df["Date"].isnull().all():
+                date_parsed = True
+        except:
+            pass
+        
+        # Second try: with dayfirst=True
+        if not date_parsed:
+            try:
+                df["Date"] = pd.to_datetime(df[date_col], errors="coerce", dayfirst=True)
+                if not df["Date"].isnull().all():
+                    date_parsed = True
+            except:
+                pass
+        
+        # Third try: with infer_datetime_format
+        if not date_parsed:
+            try:
+                df["Date"] = pd.to_datetime(df[date_col], errors="coerce", infer_datetime_format=True)
+                if not df["Date"].isnull().all():
+                    date_parsed = True
+            except:
+                pass
+        
+        # If all parsing failed, use current date
+        if not date_parsed:
             df["Date"] = pd.Timestamp.now()
-            
     else:
         # If no date column found, use current date
         df["Date"] = pd.Timestamp.now()
     
-    # Ensure Date column exists and has valid values
-    if "Date" not in df.columns:
-        df["Date"] = pd.Timestamp.now()
-    
-    # Convert to datetime if not already
+    # Ensure Date column is datetime
     if not pd.api.types.is_datetime64_any_dtype(df["Date"]):
-        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+        try:
+            df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+        except:
+            df["Date"] = pd.Timestamp.now()
     
-    # If any NaT values remain, fill with current date
+    # Fill any remaining NaN dates with current date
     if df["Date"].isnull().any():
         df["Date"] = df["Date"].fillna(pd.Timestamp.now())
     
