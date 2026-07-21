@@ -207,12 +207,14 @@ def load_sheet(sheet_id, sheet_name):
                 rename_map[col] = 'UTR Number'
             elif 'status' in col_lower:
                 rename_map[col] = 'Status'
-            elif 'date' in col_lower:
+            elif 'date' in col_lower or 'timestamp' in col_lower:
                 rename_map[col] = 'Date'
             elif 'bzid' in col_lower or 'business id' in col_lower:
                 rename_map[col] = 'BZID'
             elif 'approved by' in col_lower:
                 rename_map[col] = 'Approved By'
+            elif 'timestamp' in col_lower:
+                rename_map[col] = 'Date'
         
         # Apply renaming
         df = df.rename(columns=rename_map)
@@ -304,7 +306,7 @@ def prepare_refund_df(df, source_name):
     
     df["BZID"] = df[bzid_col].astype(str).str.strip().str.upper()
     
-    # Find Date column
+    # Find Date column - look for Timestamp or Date
     date_col = None
     for col in ["Date", "date", "Timestamp", "timestamp"]:
         if col in df.columns:
@@ -318,23 +320,24 @@ def prepare_refund_df(df, source_name):
                 break
     
     if date_col is None:
-        # If no date column, return empty dataframe
-        return pd.DataFrame(columns=standard_columns)
-    
-    # Convert date - handle different formats
-    try:
-        df["Date"] = pd.to_datetime(df[date_col], errors="coerce")
-        if df["Date"].isna().all():
-            # Try with dayfirst=True for DD-MM-YYYY format
-            df["Date"] = pd.to_datetime(df[date_col], errors="coerce", dayfirst=True)
-    except:
+        # If no date column, create a default date (today)
+        df["Date"] = pd.Timestamp.now()
+    else:
+        # Convert date - handle different formats
         try:
-            df["Date"] = pd.to_datetime(df[date_col], errors="coerce", infer_datetime_format=True)
+            df["Date"] = pd.to_datetime(df[date_col], errors="coerce")
+            if df["Date"].isna().all():
+                # Try with dayfirst=True for DD-MM-YYYY format
+                df["Date"] = pd.to_datetime(df[date_col], errors="coerce", dayfirst=True)
         except:
-            df["Date"] = pd.NaT
-    
-    if df["Date"].isna().all():
-        return pd.DataFrame(columns=standard_columns)
+            try:
+                df["Date"] = pd.to_datetime(df[date_col], errors="coerce", infer_datetime_format=True)
+            except:
+                df["Date"] = pd.Timestamp.now()
+        
+        # If all dates are NaT, use current date
+        if df["Date"].isna().all():
+            df["Date"] = pd.Timestamp.now()
     
     # Find Amount column
     amount_col = None
@@ -609,7 +612,7 @@ with tab1:
             cash_df = load_sheet(st.secrets["cash_upi_sheet_id"], "Form Responses 1")
             jc_df = load_sheet(st.secrets["jumbocash_sheet_id"], "Form Responses 1")
             manual_df = load_sheet(st.secrets["cash_upi_sheet_id"], "cash refund")
-            bank_transfer_count_df = load_sheet(st.secrets["new_bank_transfer_sheet_id"], "trxn details")
+            bank_transfer_count_df = load_sheet(st.secrets["new_bank_transfer_sheet_id"], "Form Responses 1")
             
             # Prepare dataframes with standardized columns
             cash_prep = prepare_refund_df(cash_df, "Cash/UPI")
@@ -729,7 +732,7 @@ with tab1:
                 st.metric("💵 Manual Cash", manual_count, f"₹{round(manual_amount, 2)}")
             with c2:
                 st.metric("🏦 Jumbocash", jc_count, f"₹{round(jc_amount, 2)}")
-                st.metric("🏦 Bank Transfer (New)", bank_count, f"₹{round(bank_amount, 2)}")
+                st.metric("🏦 Bank Transfer", bank_count, f"₹{round(bank_amount, 2)}")
             with c3:
                 st.metric("📦 Total", total_count, f"₹{round(total_amount, 2)}")
         
@@ -928,7 +931,7 @@ with tab3:
         cash_df = load_sheet(st.secrets["cash_upi_sheet_id"], "Form Responses 1")
         jc_df = load_sheet(st.secrets["jumbocash_sheet_id"], "Form Responses 1")
         manual_df = load_sheet(st.secrets["cash_upi_sheet_id"], "cash refund")
-        bank_df = load_sheet(st.secrets["new_bank_transfer_sheet_id"], "trxn details")
+        bank_df = load_sheet(st.secrets["new_bank_transfer_sheet_id"], "Form Responses 1")
         
         # Prepare all dataframes
         cash_prep = prepare_refund_df(cash_df, "Cash/UPI")
