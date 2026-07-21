@@ -127,34 +127,39 @@ def load_sheet(sheet_id, sheet_name):
             st.warning(f"⚠️ Worksheet '{sheet_name}' has no data (only headers or empty)")
             return pd.DataFrame()
         
-        # Find the header row (look for row with Ticket ID, Phone Number, etc.)
+        # Find the header row - more flexible detection
         header_row_idx = None
         for i, row in enumerate(data):
             # Check if this row contains typical column headers
             row_str = ' '.join(str(cell).lower() for cell in row if cell)
-            if 'ticket id' in row_str and 'phone number' in row_str and 'hub' in row_str:
+            # Look for any of these keywords in the row
+            has_ticket = any(keyword in row_str for keyword in ['ticket', 'bzid', 'business id', 'id'])
+            has_phone = any(keyword in row_str for keyword in ['phone', 'mobile', 'contact'])
+            has_hub = any(keyword in row_str for keyword in ['hub', 'h ub'])
+            has_date = any(keyword in row_str for keyword in ['date', 'timestamp'])
+            has_amount = any(keyword in row_str for keyword in ['amount', 'refund'])
+            
+            # If we find at least 3 of these keywords, it's likely a header row
+            header_score = sum([has_ticket, has_phone, has_hub, has_date, has_amount])
+            if header_score >= 3:
                 header_row_idx = i
                 break
         
         if header_row_idx is None:
             # If no header found, use first row as header
-            st.warning("⚠️ Could not find standard header row. Using first row as headers.")
             header_row_idx = 0
         
         # Get headers from the identified header row
         headers = [str(col).strip() if col else f"Column_{i}" for i, col in enumerate(data[header_row_idx])]
         
         # Get data rows (after header)
-        data_rows = data[header_row_idx + 1:]
-        
-        # Filter out empty rows and rows that are just numbers or text without data
         data_rows = []
         for row in data[header_row_idx + 1:]:
             # Check if row has at least one non-empty cell
             if any(cell for cell in row):
-                # Check if the row looks like actual data (has at least 3 non-empty cells)
+                # Check if the row looks like actual data (has at least 2 non-empty cells)
                 non_empty = sum(1 for cell in row if cell and str(cell).strip())
-                if non_empty >= 3:
+                if non_empty >= 2:
                     data_rows.append(row)
         
         if not data_rows:
@@ -175,21 +180,40 @@ def load_sheet(sheet_id, sheet_name):
         # Clean up column names
         df.columns = df.columns.str.strip()
         
-        # Remove any rows where Ticket ID is empty or is a non-data value
-        ticket_col = None
-        for col in ["Ticket ID", "Ticket id", "Ticket Id", "ticket id", "Ticket Number", "Ticket No"]:
-            if col in df.columns:
-                ticket_col = col
-                break
-        
-        if ticket_col:
-            # Convert Ticket ID to string and filter out non-numeric or empty values
-            df[ticket_col] = df[ticket_col].astype(str).str.strip()
-            # Keep rows with numeric ticket IDs or those that look like ticket numbers
-            df = df[df[ticket_col].str.isnumeric() | df[ticket_col].str.match(r'^\d+$') | df[ticket_col].str.match(r'^[A-Za-z]\d+$')]
+        # Clean up data - remove completely empty rows
+        df = df.dropna(how='all')
         
         # Fix duplicate columns
         df = fix_duplicate_columns(df)
+        
+        # Try to identify and standardize common column names
+        rename_map = {}
+        for col in df.columns:
+            col_lower = col.lower().strip()
+            if 'ticket' in col_lower or 'tkt' in col_lower:
+                if 'id' in col_lower or 'no' in col_lower or 'number' in col_lower:
+                    rename_map[col] = 'Ticket ID'
+            elif 'phone' in col_lower or 'mobile' in col_lower or 'contact' in col_lower:
+                rename_map[col] = 'Phone Number'
+            elif 'hub' in col_lower:
+                rename_map[col] = 'Hub'
+            elif 'city' in col_lower:
+                rename_map[col] = 'City'
+            elif 'reason' in col_lower:
+                rename_map[col] = 'Reason'
+            elif 'amount' in col_lower or 'amt' in col_lower:
+                rename_map[col] = 'Amount'
+            elif 'utr' in col_lower:
+                rename_map[col] = 'UTR Number'
+            elif 'status' in col_lower:
+                rename_map[col] = 'Status'
+            elif 'date' in col_lower:
+                rename_map[col] = 'Date'
+            elif 'bzid' in col_lower or 'business id' in col_lower:
+                rename_map[col] = 'BZID'
+        
+        # Apply renaming
+        df = df.rename(columns=rename_map)
         
         return df
         
