@@ -286,7 +286,14 @@ def prepare_refund_df(df, source_name):
             bzid_col = col
             break
     if bzid_col is None:
+        # Try to find any column that might contain BZID
+        for col in df.columns:
+            if 'bzid' in col.lower() or 'business' in col.lower():
+                bzid_col = col
+                break
+    if bzid_col is None:
         return pd.DataFrame(columns=["BZID", "Date", "Amount", "Ticket", "Source"])
+    
     df["BZID"] = df[bzid_col].astype(str).str.strip().str.upper()
     
     # Find Date column
@@ -296,15 +303,26 @@ def prepare_refund_df(df, source_name):
             date_col = col
             break
     if date_col is None:
+        # Try to find any column with date in name
+        for col in df.columns:
+            if 'date' in col.lower() or 'timestamp' in col.lower():
+                date_col = col
+                break
+    if date_col is None:
         return pd.DataFrame(columns=["BZID", "Date", "Amount", "Ticket", "Source"])
     
     # Convert date - handle different formats
-    df["Date"] = pd.to_datetime(df[date_col], errors="coerce")
-    if df["Date"].isna().all():
+    try:
+        df["Date"] = pd.to_datetime(df[date_col], errors="coerce")
+        if df["Date"].isna().all():
+            # Try with dayfirst=True for DD-MM-YYYY format
+            df["Date"] = pd.to_datetime(df[date_col], errors="coerce", dayfirst=True)
+    except:
         try:
             df["Date"] = pd.to_datetime(df[date_col], errors="coerce", infer_datetime_format=True)
         except:
-            pass
+            return pd.DataFrame(columns=["BZID", "Date", "Amount", "Ticket", "Source"])
+    
     if df["Date"].isna().all():
         return pd.DataFrame(columns=["BZID", "Date", "Amount", "Ticket", "Source"])
     
@@ -314,6 +332,11 @@ def prepare_refund_df(df, source_name):
         if col in df.columns:
             amount_col = col
             break
+    if amount_col is None:
+        for col in df.columns:
+            if 'amount' in col.lower() or 'amt' in col.lower():
+                amount_col = col
+                break
     if amount_col:
         df["Amount"] = pd.to_numeric(df[amount_col], errors="coerce").fillna(0)
     else:
@@ -325,6 +348,11 @@ def prepare_refund_df(df, source_name):
         if col in df.columns:
             ticket_col = col
             break
+    if ticket_col is None:
+        for col in df.columns:
+            if 'ticket' in col.lower():
+                ticket_col = col
+                break
     if ticket_col:
         df["Ticket"] = df[ticket_col].astype(str)
     else:
@@ -448,7 +476,7 @@ def get_high_risk_customers_optimized(all_refunds_df, year, current_month):
 
 # ================= BANK TRANSFER DETAIL SEARCH =================
 def get_bank_transfer_data(bank_df, ticket_id):
-    """Search for a ticket by ID in bank transfer sheet"""
+    """Search for a ticket by ID in bank transfer sheet (CD Refund Sheet)"""
     if bank_df.empty:
         return pd.DataFrame()
     
@@ -555,13 +583,15 @@ with tab1:
             cash_df = load_sheet(st.secrets["cash_upi_sheet_id"], "Form Responses 1")
             jc_df = load_sheet(st.secrets["jumbocash_sheet_id"], "Form Responses 1")
             manual_df = load_sheet(st.secrets["cash_upi_sheet_id"], "cash refund")
-            bank_transfer_df = load_sheet(st.secrets["bank_transfer_sheet_id"], "Form Responses 1")
+            
+            # NEW: Load the new bank transfer sheet for refund counting (trxn details)
+            bank_transfer_count_df = load_sheet(st.secrets["new_bank_transfer_sheet_id"], "trxn details")
             
             # Prepare dataframes with standardized columns
             cash_prep = prepare_refund_df(cash_df, "Cash/UPI")
             jc_prep = prepare_refund_df(jc_df, "Jumbocash")
             manual_prep = prepare_refund_df(manual_df, "Manual Cash")
-            bank_prep = prepare_refund_df(bank_transfer_df, "Bank Transfer")
+            bank_prep = prepare_refund_df(bank_transfer_count_df, "Bank Transfer")
             
             # Combine all refunds
             all_refunds = pd.concat([cash_prep, jc_prep, manual_prep, bank_prep], ignore_index=True)
@@ -606,7 +636,7 @@ with tab1:
             cash_details = cash_df[cash_df["BZID"] == bzid] if "BZID" in cash_df.columns else pd.DataFrame()
             jc_details = jc_df[jc_df["BZID"] == bzid] if "BZID" in jc_df.columns else pd.DataFrame()
             manual_details = manual_df[manual_df["BZID"] == bzid] if "BZID" in manual_df.columns else pd.DataFrame()
-            bank_details = bank_transfer_df[bank_transfer_df["BZID"] == bzid] if "BZID" in bank_transfer_df.columns else pd.DataFrame()
+            bank_details = bank_transfer_count_df[bank_transfer_count_df["BZID"] == bzid] if "BZID" in bank_transfer_count_df.columns else pd.DataFrame()
         
         # DISPLAY
         col_left, col_right = st.columns([1, 1])
@@ -660,7 +690,7 @@ with tab1:
                 st.metric("💵 Manual Cash", manual_count, f"₹{round(manual_amount, 2)}")
             with c2:
                 st.metric("🏦 Jumbocash", jc_count, f"₹{round(jc_amount, 2)}")
-                st.metric("🏦 Bank Transfer", bank_count, f"₹{round(bank_amount, 2)}")
+                st.metric("🏦 Bank Transfer (New)", bank_count, f"₹{round(bank_amount, 2)}")
             with c3:
                 st.metric("📦 Total", total_count, f"₹{round(total_amount, 2)}")
         
@@ -755,7 +785,7 @@ with tab1:
         
         st.dataframe(monthly_df.style.apply(highlight_current, axis=1), use_container_width=True, hide_index=True)
 
-# ================= TAB 2: Bank Transfer Refund Details =================
+# ================= TAB 2: Bank Transfer Refund Details (CD Refund Sheet) =================
 with tab2:
     st.markdown("## 🏦 Bank Transfer Refund Details")
     st.markdown("*Search for a bank transfer refund by Ticket ID and view all details including UTR number, status, and transaction information*")
@@ -770,8 +800,8 @@ with tab2:
         ticket_id = ticket_id_input.strip()
         
         with st.spinner(f"Searching for Ticket ID: {ticket_id}..."):
-            # Load bank transfer data
-            bank_df = load_sheet(st.secrets["bank_transfer_sheet_id"], "Form Responses 1")
+            # Load bank transfer data from CD Refund Sheet
+            bank_df = load_sheet(st.secrets["bank_transfer_sheet_id"], "CD Refund Sheet")
             
             if bank_df.empty:
                 st.warning("⚠️ No data found in the bank transfer sheet. Please check if the sheet has data.")
@@ -856,7 +886,7 @@ with tab3:
         cash_df = load_sheet(st.secrets["cash_upi_sheet_id"], "Form Responses 1")
         jc_df = load_sheet(st.secrets["jumbocash_sheet_id"], "Form Responses 1")
         manual_df = load_sheet(st.secrets["cash_upi_sheet_id"], "cash refund")
-        bank_df = load_sheet(st.secrets["bank_transfer_sheet_id"], "Form Responses 1")
+        bank_df = load_sheet(st.secrets["new_bank_transfer_sheet_id"], "trxn details")
         
         # Prepare all dataframes
         cash_prep = prepare_refund_df(cash_df, "Cash/UPI")
