@@ -199,7 +199,7 @@ def load_sheet(sheet_id, sheet_name):
                 rename_map[col] = 'Hub'
             elif 'city' in col_lower:
                 rename_map[col] = 'City'
-            elif 'reason' in col_lower:
+            elif 'reason' in col_lower or 'issue' in col_lower:
                 rename_map[col] = 'Reason'
             elif 'amount' in col_lower or 'amt' in col_lower:
                 rename_map[col] = 'Amount'
@@ -211,6 +211,8 @@ def load_sheet(sheet_id, sheet_name):
                 rename_map[col] = 'Date'
             elif 'bzid' in col_lower or 'business id' in col_lower:
                 rename_map[col] = 'BZID'
+            elif 'approved by' in col_lower:
+                rename_map[col] = 'Approved By'
         
         # Apply renaming
         df = df.rename(columns=rename_map)
@@ -269,86 +271,93 @@ def get_monthly_counts(df, bzid, year):
         month_names.append(datetime(year, month, 1).strftime("%B"))
     return month_names, monthly_counts
 
+# ================= PREPARE DATA FORMATTING =================
+def prepare_refund_df(df, source_name):
+    """Prepare a refund dataframe with standardized columns"""
+    if df.empty:
+        return pd.DataFrame(columns=["BZID", "Date", "Amount", "Ticket", "Source"])
+    
+    df = df.copy()
+    
+    # Find BZID column
+    bzid_col = None
+    for col in ["BZID", "Business ID", "BZD", "bzid"]:
+        if col in df.columns:
+            bzid_col = col
+            break
+    if bzid_col is None:
+        return pd.DataFrame(columns=["BZID", "Date", "Amount", "Ticket", "Source"])
+    df["BZID"] = df[bzid_col].astype(str).str.strip().str.upper()
+    
+    # Find Date column
+    date_col = None
+    for col in ["Date", "date", "Timestamp", "timestamp"]:
+        if col in df.columns:
+            date_col = col
+            break
+    if date_col is None:
+        return pd.DataFrame(columns=["BZID", "Date", "Amount", "Ticket", "Source"])
+    
+    # Convert date - handle different formats
+    df["Date"] = pd.to_datetime(df[date_col], errors="coerce")
+    if df["Date"].isna().all():
+        try:
+            df["Date"] = pd.to_datetime(df[date_col], errors="coerce", infer_datetime_format=True)
+        except:
+            pass
+    if df["Date"].isna().all():
+        return pd.DataFrame(columns=["BZID", "Date", "Amount", "Ticket", "Source"])
+    
+    # Find Amount column
+    amount_col = None
+    for col in ["Amount", "amount", "Refund Amount"]:
+        if col in df.columns:
+            amount_col = col
+            break
+    if amount_col:
+        df["Amount"] = pd.to_numeric(df[amount_col], errors="coerce").fillna(0)
+    else:
+        df["Amount"] = 0
+    
+    # Find Ticket column
+    ticket_col = None
+    for col in ["Ticket Number", "Ticket ID", "Ticket No", "Ticket Number_1", "Ticket ID_1"]:
+        if col in df.columns:
+            ticket_col = col
+            break
+    if ticket_col:
+        df["Ticket"] = df[ticket_col].astype(str)
+    else:
+        df["Ticket"] = df.index.astype(str)
+    
+    # Add source
+    df["Source"] = source_name
+    
+    return df[["BZID", "Date", "Amount", "Ticket", "Source"]]
+
 # ================= OPTIMIZED: GET HIGH RISK CUSTOMERS =================
 @st.cache_data(ttl=300)
-def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_month):
-    if current_month is None:
+def get_high_risk_customers_optimized(all_refunds_df, year, current_month):
+    if current_month is None or all_refunds_df.empty:
         return pd.DataFrame()
     
-    def prepare_df(df):
-        if df.empty:
-            return pd.DataFrame(columns=["BZID", "Date", "Amount", "Ticket"])
-        
-        df = df.copy()
-        
-        bzid_col = None
-        for col in ["BZID", "Business ID", "BZD", "bzid"]:
-            if col in df.columns:
-                bzid_col = col
-                break
-        if bzid_col is None:
-            return pd.DataFrame(columns=["BZID", "Date", "Amount", "Ticket"])
-        df["BZID"] = df[bzid_col].astype(str).str.strip().str.upper()
-        
-        date_col = None
-        for col in ["Date", "date", "Timestamp", "timestamp"]:
-            if col in df.columns:
-                date_col = col
-                break
-        if date_col is None:
-            return pd.DataFrame(columns=["BZID", "Date", "Amount", "Ticket"])
-        df["Date"] = pd.to_datetime(df[date_col], errors="coerce")
-        if df["Date"].isna().all():
-            try:
-                df["Date"] = pd.to_datetime(df[date_col], errors="coerce", infer_datetime_format=True)
-            except:
-                pass
-        if df["Date"].isna().all():
-            return pd.DataFrame(columns=["BZID", "Date", "Amount", "Ticket"])
-        
-        df = df[(df["Date"].dt.year == year) & (df["Date"].dt.month <= current_month) & (df["Date"].notna())]
-        if df.empty:
-            return pd.DataFrame(columns=["BZID", "Date", "Amount", "Ticket"])
-        
-        amount_col = None
-        for col in ["Amount", "amount", "Refund Amount"]:
-            if col in df.columns:
-                amount_col = col
-                break
-        if amount_col:
-            df["Amount"] = pd.to_numeric(df[amount_col], errors="coerce").fillna(0)
-        else:
-            df["Amount"] = 0
-        
-        ticket_col = None
-        for col in ["Ticket Number", "Ticket ID", "Ticket No", "Ticket Number_1", "Ticket ID_1"]:
-            if col in df.columns:
-                ticket_col = col
-                break
-        if ticket_col:
-            df["Ticket"] = df[ticket_col].astype(str)
-        else:
-            df["Ticket"] = df.index.astype(str)
-        
-        return df[["BZID", "Date", "Amount", "Ticket"]]
+    df = all_refunds_df.copy()
     
-    cash_prep = prepare_df(cash_df)
-    jc_prep = prepare_df(jc_df)
-    manual_prep = prepare_df(manual_df)
-    
-    all_data = pd.concat([cash_prep, jc_prep, manual_prep], ignore_index=True)
-    if all_data.empty:
+    # Ensure Date is datetime
+    if not pd.api.types.is_datetime64_any_dtype(df["Date"]):
+        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+    df = df[df["Date"].notna()]
+    if df.empty:
         return pd.DataFrame()
     
-    if not pd.api.types.is_datetime64_any_dtype(all_data["Date"]):
-        all_data["Date"] = pd.to_datetime(all_data["Date"], errors="coerce")
-    all_data = all_data[all_data["Date"].notna()]
-    if all_data.empty:
+    # Filter to current year and up to current month
+    df = df[(df["Date"].dt.year == year) & (df["Date"].dt.month <= current_month)]
+    if df.empty:
         return pd.DataFrame()
     
-    all_data["Month"] = all_data["Date"].dt.month
+    df["Month"] = df["Date"].dt.month
     
-    monthly_summary = all_data.groupby(["BZID", "Month"]).agg(
+    monthly_summary = df.groupby(["BZID", "Month"]).agg(
         Refund_Count=("Ticket", "nunique"),
         Total_Amount=("Amount", "sum")
     ).reset_index()
@@ -390,9 +399,11 @@ def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_m
         active_in_last_3 = sum(1 for c in last_3_months if c > 0) >= 2
         total_amount = sum(monthly_amounts)
         
-        cash_total = cash_prep[cash_prep["BZID"] == bzid]["Amount"].sum() if not cash_prep.empty else 0
-        jc_total = jc_prep[jc_prep["BZID"] == bzid]["Amount"].sum() if not jc_prep.empty else 0
-        manual_total = manual_prep[manual_prep["BZID"] == bzid]["Amount"].sum() if not manual_prep.empty else 0
+        # Calculate totals by source
+        cash_total = df[(df["BZID"] == bzid) & (df["Source"] == "Cash/UPI")]["Amount"].sum()
+        jc_total = df[(df["BZID"] == bzid) & (df["Source"] == "Jumbocash")]["Amount"].sum()
+        manual_total = df[(df["BZID"] == bzid) & (df["Source"] == "Manual Cash")]["Amount"].sum()
+        bank_total = df[(df["BZID"] == bzid) & (df["Source"] == "Bank Transfer")]["Amount"].sum()
         
         consistent_defaulter = all(count >= 4 for count in monthly_counts[:current_month])
         has_policy_breach = max_monthly_refunds >= 5
@@ -429,12 +440,13 @@ def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_m
             "Cash_UPI": round(cash_total, 2),
             "Jumbocash": round(jc_total, 2),
             "Manual_Cash": round(manual_total, 2),
+            "Bank_Transfer": round(bank_total, 2),
             **monthly_breakdown
         })
     
     return pd.DataFrame(results)
 
-# ================= BANK TRANSFER DATA =================
+# ================= BANK TRANSFER DETAIL SEARCH =================
 def get_bank_transfer_data(bank_df, ticket_id):
     """Search for a ticket by ID in bank transfer sheet"""
     if bank_df.empty:
@@ -462,7 +474,7 @@ def get_bank_transfer_data(bank_df, ticket_id):
     if df.empty:
         return pd.DataFrame()
     
-    # Rename columns for better display - using case-insensitive matching
+    # Rename columns for better display
     rename_map = {}
     for col in df.columns:
         col_lower = col.lower() if col else ''
@@ -474,7 +486,7 @@ def get_bank_transfer_data(bank_df, ticket_id):
             rename_map[col] = "Hub"
         elif col_lower in ['city', 'city name']:
             rename_map[col] = "City"
-        elif 'reason' in col_lower:
+        elif 'reason' in col_lower or 'issue' in col_lower:
             rename_map[col] = "Reason"
         elif 'amount' in col_lower:
             rename_map[col] = "Amount"
@@ -484,6 +496,8 @@ def get_bank_transfer_data(bank_df, ticket_id):
             rename_map[col] = "Status"
         elif col_lower in ['date', 'date1']:
             rename_map[col] = "Date"
+        elif 'approved by' in col_lower:
+            rename_map[col] = "Approved By"
     
     df = df.rename(columns=rename_map)
     
@@ -497,7 +511,7 @@ def get_bank_transfer_data(bank_df, ticket_id):
         df["Date"] = df["Date"].dt.strftime("%d-%m-%Y")
     
     # Select only columns we want to display
-    display_cols = ["Ticket ID", "Phone Number", "Hub", "City", "Reason", "Amount", "UTR Number", "Status", "Date"]
+    display_cols = ["Ticket ID", "Phone Number", "Hub", "City", "Reason", "Amount", "UTR Number", "Status", "Date", "Approved By"]
     df_display = df[[col for col in display_cols if col in df.columns]].copy()
     
     # Format amount
@@ -537,73 +551,62 @@ with tab1:
         bzid = bzid_input.strip().upper()
         
         with st.spinner("Fetching data..."):
+            # Load all sheets
             cash_df = load_sheet(st.secrets["cash_upi_sheet_id"], "Form Responses 1")
             jc_df = load_sheet(st.secrets["jumbocash_sheet_id"], "Form Responses 1")
             manual_df = load_sheet(st.secrets["cash_upi_sheet_id"], "cash refund")
+            bank_transfer_df = load_sheet(st.secrets["bank_transfer_sheet_id"], "Form Responses 1")
             
-            # CASH / UPI
-            cash_df["BZID"] = cash_df["Business ID"].astype(str).str.strip().str.upper()
-            cash_df["Date"] = pd.to_datetime(cash_df["Date"], errors="coerce")
-            if "Timestamp" in cash_df.columns:
-                cash_df["Date"] = cash_df["Date"].fillna(pd.to_datetime(cash_df["Timestamp"], errors="coerce"))
+            # Prepare dataframes with standardized columns
+            cash_prep = prepare_refund_df(cash_df, "Cash/UPI")
+            jc_prep = prepare_refund_df(jc_df, "Jumbocash")
+            manual_prep = prepare_refund_df(manual_df, "Manual Cash")
+            bank_prep = prepare_refund_df(bank_transfer_df, "Bank Transfer")
             
-            # JUMBOCASH
-            jc_df.columns = jc_df.columns.str.strip()
-            jc_df["BZID"] = jc_df["BZID"].astype(str).str.strip().str.upper()
-            if "date" in jc_df.columns:
-                jc_df["Date"] = pd.to_datetime(jc_df["date"], errors="coerce")
-            elif "Date" in jc_df.columns:
-                jc_df["Date"] = pd.to_datetime(jc_df["Date"], errors="coerce")
-            else:
-                jc_df["Date"] = pd.NaT
-            if "Timestamp" in jc_df.columns:
-                jc_df["Date"] = jc_df["Date"].fillna(pd.to_datetime(jc_df["Timestamp"], errors="coerce"))
+            # Combine all refunds
+            all_refunds = pd.concat([cash_prep, jc_prep, manual_prep, bank_prep], ignore_index=True)
             
-            # MANUAL CASH
-            manual_df["BZID"] = manual_df["BZID"].astype(str).str.strip().str.upper()
-            manual_df["Date"] = pd.to_datetime(manual_df["Date"], errors="coerce")
-            if "Timestamp" in manual_df.columns:
-                manual_df["Date"] = manual_df["Date"].fillna(pd.to_datetime(manual_df["Timestamp"], errors="coerce"))
+            if all_refunds.empty:
+                st.warning("No refund data found!")
+                st.stop()
             
-            # FILTER BY BZID AND MONTH
-            cash_current_matches = cash_df[
-                (cash_df["BZID"] == bzid) &
-                (cash_df["Date"].notna()) &
-                (cash_df["Date"].dt.month == month_input) &
-                (cash_df["Date"].dt.year == selected_year)
+            # Filter by BZID
+            bzid_refunds = all_refunds[all_refunds["BZID"] == bzid]
+            
+            if bzid_refunds.empty:
+                st.warning(f"No refunds found for BZID: {bzid}")
+                st.stop()
+            
+            # Filter by selected month and year
+            month_refunds = bzid_refunds[
+                (bzid_refunds["Date"].dt.month == month_input) &
+                (bzid_refunds["Date"].dt.year == selected_year)
             ]
             
-            jc_current_matches = jc_df[
-                (jc_df["BZID"] == bzid) &
-                (jc_df["Date"].notna()) &
-                (jc_df["Date"].dt.month == month_input) &
-                (jc_df["Date"].dt.year == selected_year)
-            ]
+            # Count refunds by source for current month
+            cash_count = len(month_refunds[month_refunds["Source"] == "Cash/UPI"])
+            jc_count = len(month_refunds[month_refunds["Source"] == "Jumbocash"])
+            manual_count = len(month_refunds[month_refunds["Source"] == "Manual Cash"])
+            bank_count = len(month_refunds[month_refunds["Source"] == "Bank Transfer"])
+            total_count = len(month_refunds)
             
-            manual_current_matches = manual_df[
-                (manual_df["BZID"] == bzid) &
-                (manual_df["Date"].notna()) &
-                (manual_df["Date"].dt.month == month_input) &
-                (manual_df["Date"].dt.year == selected_year)
-            ]
+            # Calculate amounts by source for current month
+            cash_amount = month_refunds[month_refunds["Source"] == "Cash/UPI"]["Amount"].sum()
+            jc_amount = month_refunds[month_refunds["Source"] == "Jumbocash"]["Amount"].sum()
+            manual_amount = month_refunds[month_refunds["Source"] == "Manual Cash"]["Amount"].sum()
+            bank_amount = month_refunds[month_refunds["Source"] == "Bank Transfer"]["Amount"].sum()
+            total_amount = month_refunds["Amount"].sum()
             
-            # COUNTS
-            cash_count_current = cash_current_matches["Ticket Number"].nunique() if not cash_current_matches.empty else 0
-            jc_count_current = jc_current_matches["Ticket ID"].nunique() if not jc_current_matches.empty else 0
-            manual_count_current = manual_current_matches["Ticket No"].nunique() if not manual_current_matches.empty else 0
-            total_count_current = cash_count_current + jc_count_current + manual_count_current
-            
-            # AMOUNTS
-            cash_amount_current = pd.to_numeric(cash_current_matches["Amount"], errors="coerce").sum() if not cash_current_matches.empty else 0
-            jc_amount_current = pd.to_numeric(jc_current_matches["Amount"], errors="coerce").sum() if not jc_current_matches.empty else 0
-            manual_amount_current = pd.to_numeric(manual_current_matches["Amount"], errors="coerce").sum() if not manual_current_matches.empty else 0
-            total_amount_current = cash_amount_current + jc_amount_current + manual_amount_current
-            
-            # YEARLY TREND
-            all_refunds = pd.concat([cash_df[["BZID", "Date"]], jc_df[["BZID", "Date"]], manual_df[["BZID", "Date"]]], ignore_index=True)
+            # Yearly trend counts
             current_year_count = get_refund_count_for_period(all_refunds, bzid, current_year, 1, current_month)
             last_year_count = get_refund_count_for_period(all_refunds, bzid, current_year - 1, 1, current_month)
             month_names, monthly_counts = get_monthly_counts(all_refunds, bzid, current_year)
+            
+            # Get detailed dataframes for display
+            cash_details = cash_df[cash_df["BZID"] == bzid] if "BZID" in cash_df.columns else pd.DataFrame()
+            jc_details = jc_df[jc_df["BZID"] == bzid] if "BZID" in jc_df.columns else pd.DataFrame()
+            manual_details = manual_df[manual_df["BZID"] == bzid] if "BZID" in manual_df.columns else pd.DataFrame()
+            bank_details = bank_transfer_df[bank_transfer_df["BZID"] == bzid] if "BZID" in bank_transfer_df.columns else pd.DataFrame()
         
         # DISPLAY
         col_left, col_right = st.columns([1, 1])
@@ -612,13 +615,13 @@ with tab1:
             st.markdown(f"## 📊 Current Month")
             st.markdown(f"### {selected_month_label}")
             
-            if total_count_current < 5:
+            if total_count < 5:
                 st.markdown(f"""
                 <div class="decision-approve">
                     <div class="decision-icon tick-mark">✅</div>
                     <div class="decision-text">
                         <h2 style="color: #28a745; margin: 0;">APPROVED</h2>
-                        <p style="font-size: 18px; margin: 5px 0;">Total Refunds: {total_count_current} (Less than 5)</p>
+                        <p style="font-size: 18px; margin: 5px 0;">Total Refunds: {total_count} (Less than 5)</p>
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
@@ -628,12 +631,12 @@ with tab1:
                     <div class="decision-icon cross-mark">❌</div>
                     <div class="decision-text">
                         <h2 style="color: #dc3545; margin: 0;">DENIED</h2>
-                        <p style="font-size: 18px; margin: 5px 0;">Total Refunds: {total_count_current} (5 or more - Limit reached)</p>
+                        <p style="font-size: 18px; margin: 5px 0;">Total Refunds: {total_count} (5 or more - Limit reached)</p>
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
             
-            if total_count_current >= 5:
+            if total_count >= 5:
                 st.markdown("""
                 <div style="text-align: center; padding: 10px; background-color: #f8d7da; border-radius: 10px; margin-top: 10px;">
                     <span style="font-size: 32px;">🚶</span>
@@ -650,37 +653,46 @@ with tab1:
                 </div>
                 """, unsafe_allow_html=True)
             
-            c1, c2 = st.columns(2)
+            # Metrics with 3 columns
+            c1, c2, c3 = st.columns(3)
             with c1:
-                st.metric("💳 Cash / UPI", cash_count_current, f"₹{round(cash_amount_current, 2)}")
-                st.metric("💵 Manual Cash", manual_count_current, f"₹{round(manual_amount_current, 2)}")
+                st.metric("💳 Cash / UPI", cash_count, f"₹{round(cash_amount, 2)}")
+                st.metric("💵 Manual Cash", manual_count, f"₹{round(manual_amount, 2)}")
             with c2:
-                st.metric("🏦 Jumbocash", jc_count_current, f"₹{round(jc_amount_current, 2)}")
-                st.metric("📦 Total", total_count_current, f"₹{round(total_amount_current, 2)}")
+                st.metric("🏦 Jumbocash", jc_count, f"₹{round(jc_amount, 2)}")
+                st.metric("🏦 Bank Transfer", bank_count, f"₹{round(bank_amount, 2)}")
+            with c3:
+                st.metric("📦 Total", total_count, f"₹{round(total_amount, 2)}")
         
         with col_right:
             st.markdown(f"## 📋 Refund Details")
             st.markdown(f"### {selected_month_label}")
             
-            tabs_inner = st.tabs(["💳 Cash/UPI", "🏦 Jumbocash", "💵 Manual Cash"])
+            tabs_inner = st.tabs(["💳 Cash/UPI", "🏦 Jumbocash", "💵 Manual Cash", "🏦 Bank Transfer"])
             
             with tabs_inner[0]:
-                if not cash_current_matches.empty:
-                    st.dataframe(cash_current_matches.reset_index(drop=True), use_container_width=True, height=300)
+                if not cash_details.empty:
+                    st.dataframe(cash_details, use_container_width=True, height=300)
                 else:
                     st.info("No Cash/UPI refunds for this month")
             
             with tabs_inner[1]:
-                if not jc_current_matches.empty:
-                    st.dataframe(jc_current_matches.reset_index(drop=True), use_container_width=True, height=300)
+                if not jc_details.empty:
+                    st.dataframe(jc_details, use_container_width=True, height=300)
                 else:
                     st.info("No Jumbocash refunds for this month")
             
             with tabs_inner[2]:
-                if not manual_current_matches.empty:
-                    st.dataframe(manual_current_matches.reset_index(drop=True), use_container_width=True, height=300)
+                if not manual_details.empty:
+                    st.dataframe(manual_details, use_container_width=True, height=300)
                 else:
                     st.info("No Manual Cash refunds for this month")
+            
+            with tabs_inner[3]:
+                if not bank_details.empty:
+                    st.dataframe(bank_details, use_container_width=True, height=300)
+                else:
+                    st.info("No Bank Transfer refunds for this month")
         
         # YEARLY TREND
         st.markdown("---")
@@ -758,8 +770,8 @@ with tab2:
         ticket_id = ticket_id_input.strip()
         
         with st.spinner(f"Searching for Ticket ID: {ticket_id}..."):
-            # Load bank transfer data - using the correct sheet name "CD Refund Sheet"
-            bank_df = load_sheet(st.secrets["bank_transfer_sheet_id"], "CD Refund Sheet")
+            # Load bank transfer data
+            bank_df = load_sheet(st.secrets["bank_transfer_sheet_id"], "Form Responses 1")
             
             if bank_df.empty:
                 st.warning("⚠️ No data found in the bank transfer sheet. Please check if the sheet has data.")
@@ -794,6 +806,7 @@ with tab2:
                         <tr><td style="padding: 8px; font-weight: bold;">UTR Number:</td><td style="padding: 8px; font-family: monospace;">{row.get('UTR Number', 'N/A')}</td></tr>
                         <tr><td style="padding: 8px; font-weight: bold;">Status:</td><td style="padding: 8px; color: {status_color}; font-weight: bold;">{row.get('Status', 'N/A')}</td></tr>
                         <tr><td style="padding: 8px; font-weight: bold;">Date:</td><td style="padding: 8px;">{row.get('Date', 'N/A')}</td></tr>
+                        <tr><td style="padding: 8px; font-weight: bold;">Approved By:</td><td style="padding: 8px;">{row.get('Approved By', 'N/A')}</td></tr>
                     </table>
                 </div>
                 """, unsafe_allow_html=True)
@@ -808,7 +821,6 @@ with tab2:
             
             total_amount = 0
             if "Amount (₹)" in bank_match.columns:
-                # Extract numeric values from strings like "₹1234.56"
                 total_amount = bank_match["Amount (₹)"].str.replace("₹", "").str.replace(",", "").astype(float).sum()
             
             col1, col2 = st.columns(2)
@@ -844,15 +856,25 @@ with tab3:
         cash_df = load_sheet(st.secrets["cash_upi_sheet_id"], "Form Responses 1")
         jc_df = load_sheet(st.secrets["jumbocash_sheet_id"], "Form Responses 1")
         manual_df = load_sheet(st.secrets["cash_upi_sheet_id"], "cash refund")
-        return cash_df, jc_df, manual_df
+        bank_df = load_sheet(st.secrets["bank_transfer_sheet_id"], "Form Responses 1")
+        
+        # Prepare all dataframes
+        cash_prep = prepare_refund_df(cash_df, "Cash/UPI")
+        jc_prep = prepare_refund_df(jc_df, "Jumbocash")
+        manual_prep = prepare_refund_df(manual_df, "Manual Cash")
+        bank_prep = prepare_refund_df(bank_df, "Bank Transfer")
+        
+        # Combine all refunds
+        all_refunds = pd.concat([cash_prep, jc_prep, manual_prep, bank_prep], ignore_index=True)
+        return all_refunds
     
     if 'high_risk_data' not in st.session_state:
         st.session_state.high_risk_data = None
     
     if st.button("🔄 Load High Risk Customers"):
-        cash_df, jc_df, manual_df = load_all_data()
         with st.spinner("Analyzing customer data..."):
-            high_risk_df = get_high_risk_customers_optimized(cash_df, jc_df, manual_df, current_year, current_month)
+            all_refunds = load_all_data()
+            high_risk_df = get_high_risk_customers_optimized(all_refunds, current_year, current_month)
             st.session_state.high_risk_data = high_risk_df
     
     if st.session_state.high_risk_data is not None and not st.session_state.high_risk_data.empty:
@@ -864,7 +886,7 @@ with tab3:
         
         st.success(f"Found {len(high_risk_df)} high-risk customers")
         
-        col1, col2, col3, col4, col5 = st.columns(5)
+        col1, col2, col3, col4, col5, col6 = st.columns(6)
         with col1:
             st.metric("Total High Risk", len(high_risk_df))
         with col2:
@@ -875,6 +897,8 @@ with tab3:
             st.metric("🟡 Potential", len(high_risk_df[high_risk_df["Risk Level"] == "🟡 POTENTIAL"]))
         with col5:
             st.metric("Total Amount", f"₹{high_risk_df['Total Amount'].sum():,.2f}")
+        with col6:
+            st.metric("Total Refunds", high_risk_df['Total Refunds'].sum())
         
         month_abbr = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][:current_month]
         
@@ -890,6 +914,7 @@ with tab3:
             "Cash_UPI": st.column_config.NumberColumn("Cash/UPI (₹)", format="₹%.2f"),
             "Jumbocash": st.column_config.NumberColumn("Jumbocash (₹)", format="₹%.2f"),
             "Manual_Cash": st.column_config.NumberColumn("Manual Cash (₹)", format="₹%.2f"),
+            "Bank_Transfer": st.column_config.NumberColumn("Bank Transfer (₹)", format="₹%.2f"),
         }
         for month in month_abbr:
             column_config[month] = st.column_config.TextColumn(month)
