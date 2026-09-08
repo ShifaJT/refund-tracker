@@ -98,19 +98,6 @@ def fix_duplicate_columns(df):
     df.columns = cols
     return df
 
-# ================= FIND COLUMN NAME =================
-def find_column(df, possible_names):
-    """Find a column by checking multiple possible names"""
-    if df.empty:
-        return None
-    for name in possible_names:
-        if name in df.columns:
-            return name
-        for col in df.columns:
-            if col.lower() == name.lower():
-                return col
-    return None
-
 # ================= LOAD SHEETS =================
 @st.cache_data(ttl=300)
 def load_sheet(sheet_id, sheet_name):
@@ -118,47 +105,63 @@ def load_sheet(sheet_id, sheet_name):
         client = get_client()
         sheet = client.open_by_key(sheet_id)
        
+        # Try to get the worksheet by name
         try:
             ws = sheet.worksheet(sheet_name)
         except gspread.exceptions.WorksheetNotFound:
+            # If worksheet not found, list all available worksheets
             available_sheets = [ws.title for ws in sheet.worksheets()]
-            st.error(f"Worksheet '{sheet_name}' not found!")
-            st.info(f"Available worksheets: {', '.join(available_sheets)}")
+            st.error(f"❌ Worksheet '{sheet_name}' not found!")
+            st.info(f"📋 Available worksheets in this sheet: {', '.join(available_sheets)}")
+            # Try to use the first available worksheet
             if available_sheets:
-                st.info(f"Trying '{available_sheets[0]}' instead...")
+                st.info(f"💡 Trying to use '{available_sheets[0]}' instead...")
                 ws = sheet.worksheet(available_sheets[0])
             else:
                 return pd.DataFrame()
        
+        # Get all values
         data = ws.get_all_values()
        
         if len(data) <= 1:
-            st.warning(f"Worksheet '{sheet_name}' has no data")
+            st.warning(f"⚠️ Worksheet '{sheet_name}' has no data (only headers or empty)")
             return pd.DataFrame()
        
+        # Find the header row (look for row with Ticket ID, Phone Number, etc.)
         header_row_idx = None
         for i, row in enumerate(data):
+            # Check if this row contains typical column headers
             row_str = ' '.join(str(cell).lower() for cell in row if cell)
-            if 'item' in row_str and 'freebie' in row_str:
+            if 'ticket id' in row_str and 'phone number' in row_str and 'hub' in row_str:
                 header_row_idx = i
                 break
        
         if header_row_idx is None:
+            # If no header found, use first row as header
+            st.warning("⚠️ Could not find standard header row. Using first row as headers.")
             header_row_idx = 0
        
+        # Get headers from the identified header row
         headers = [str(col).strip() if col else f"Column_{i}" for i, col in enumerate(data[header_row_idx])]
        
+        # Get data rows (after header)
+        data_rows = data[header_row_idx + 1:]
+       
+        # Filter out empty rows and rows that are just numbers or text without data
         data_rows = []
         for row in data[header_row_idx + 1:]:
+            # Check if row has at least one non-empty cell
             if any(cell for cell in row):
+                # Check if the row looks like actual data (has at least 3 non-empty cells)
                 non_empty = sum(1 for cell in row if cell and str(cell).strip())
-                if non_empty >= 2:
+                if non_empty >= 3:
                     data_rows.append(row)
        
         if not data_rows:
-            st.warning(f"No data rows found in '{sheet_name}'")
+            st.warning(f"⚠️ No data rows found in worksheet '{sheet_name}'")
             return pd.DataFrame()
        
+        # Ensure all rows have the same length as headers
         max_len = len(headers)
         for i, row in enumerate(data_rows):
             if len(row) < max_len:
@@ -166,101 +169,37 @@ def load_sheet(sheet_id, sheet_name):
             elif len(row) > max_len:
                 data_rows[i] = row[:max_len]
        
+        # Create DataFrame
         df = pd.DataFrame(data_rows, columns=headers)
+       
+        # Clean up column names
         df.columns = df.columns.str.strip()
+       
+        # Remove any rows where Ticket ID is empty or is a non-data value
+        ticket_col = None
+        for col in ["Ticket ID", "Ticket id", "Ticket Id", "ticket id", "Ticket Number", "Ticket No"]:
+            if col in df.columns:
+                ticket_col = col
+                break
+       
+        if ticket_col:
+            # Convert Ticket ID to string and filter out non-numeric or empty values
+            df[ticket_col] = df[ticket_col].astype(str).str.strip()
+            # Keep rows with numeric ticket IDs or those that look like ticket numbers
+            df = df[df[ticket_col].str.isnumeric() | df[ticket_col].str.match(r'^\d+$') | df[ticket_col].str.match(r'^[A-Za-z]\d+$')]
+       
+        # Fix duplicate columns
         df = fix_duplicate_columns(df)
        
         return df
        
     except gspread.exceptions.SpreadsheetNotFound:
-        st.error(f"Spreadsheet not found! Sheet ID: {sheet_id}")
+        st.error(f"❌ Spreadsheet not found! Sheet ID: {sheet_id}")
+        st.info("Please check if the sheet ID is correct and the service account has access.")
         return pd.DataFrame()
     except Exception as e:
-        st.error(f"Error loading sheet: {str(e)}")
+        st.error(f"❌ Error loading sheet: {str(e)}")
         return pd.DataFrame()
-
-# ================= LOAD FREEBIE DATA =================
-@st.cache_data(ttl=300)
-def load_freebie_data():
-    try:
-        freebie_sheet_id = st.secrets["freebie_sheet_id"]
-        freebie_df = load_sheet(freebie_sheet_id, "Sheet1")
-        
-        if not freebie_df.empty:
-            freebie_df.columns = freebie_df.columns.str.strip()
-            
-            required_cols = ['Item', 'Mentioned Freebie', 'Refund value']
-            missing_cols = [col for col in required_cols if col not in freebie_df.columns]
-            
-            if missing_cols:
-                st.error(f"Missing columns: {missing_cols}")
-                st.info("Please make sure your sheet has columns: 'Item', 'Mentioned Freebie', 'Refund value'")
-                return pd.DataFrame()
-        
-        return freebie_df
-    except KeyError:
-        st.error("'freebie_sheet_id' not found in secrets!")
-        return pd.DataFrame()
-    except Exception as e:
-        st.error(f"Error loading freebie data: {str(e)}")
-        return pd.DataFrame()
-
-# ================= GET CUSTOMER MONTHLY REFUND COUNT =================
-@st.cache_data(ttl=300)
-def get_customer_monthly_refund_count(cash_df, jc_df, manual_df, freebie_df, bzid, month, year):
-    """Get total refund count for a customer in a specific month across all refund types"""
-    total_count = 0
-    
-    # Cash/UPI refunds
-    if not cash_df.empty:
-        bzid_col = find_column(cash_df, ["BZID", "Business ID", "BZD", "bzid"])
-        date_col = find_column(cash_df, ["Date", "date", "Timestamp", "timestamp"])
-        if bzid_col and date_col:
-            # Create a copy to avoid modifying original
-            cash_copy = cash_df.copy()
-            cash_copy["BZID"] = cash_copy[bzid_col].astype(str).str.strip().str.upper()
-            cash_copy["Date"] = pd.to_datetime(cash_copy[date_col], errors="coerce")
-            cash_count = len(cash_copy[
-                (cash_copy["BZID"] == bzid) &
-                (cash_copy["Date"].dt.month == month) &
-                (cash_copy["Date"].dt.year == year) &
-                (cash_copy["Date"].notna())
-            ])
-            total_count += cash_count
-    
-    # Jumbocash refunds
-    if not jc_df.empty:
-        bzid_col = find_column(jc_df, ["BZID", "Business ID", "BZD", "bzid"])
-        date_col = find_column(jc_df, ["Date", "date", "Timestamp", "timestamp"])
-        if bzid_col and date_col:
-            jc_copy = jc_df.copy()
-            jc_copy["BZID"] = jc_copy[bzid_col].astype(str).str.strip().str.upper()
-            jc_copy["Date"] = pd.to_datetime(jc_copy[date_col], errors="coerce")
-            jc_count = len(jc_copy[
-                (jc_copy["BZID"] == bzid) &
-                (jc_copy["Date"].dt.month == month) &
-                (jc_copy["Date"].dt.year == year) &
-                (jc_copy["Date"].notna())
-            ])
-            total_count += jc_count
-    
-    # Manual Cash refunds
-    if not manual_df.empty:
-        bzid_col = find_column(manual_df, ["BZID", "Business ID", "BZD", "bzid"])
-        date_col = find_column(manual_df, ["Date", "date", "Timestamp", "timestamp"])
-        if bzid_col and date_col:
-            manual_copy = manual_df.copy()
-            manual_copy["BZID"] = manual_copy[bzid_col].astype(str).str.strip().str.upper()
-            manual_copy["Date"] = pd.to_datetime(manual_copy[date_col], errors="coerce")
-            manual_count = len(manual_copy[
-                (manual_copy["BZID"] == bzid) &
-                (manual_copy["Date"].dt.month == month) &
-                (manual_copy["Date"].dt.year == year) &
-                (manual_copy["Date"].notna())
-            ])
-            total_count += manual_count
-    
-    return total_count
 
 # ================= GET REFUND COUNT =================
 @st.cache_data(ttl=300)
@@ -318,12 +257,20 @@ def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_m
        
         df = df.copy()
        
-        bzid_col = find_column(df, ["BZID", "Business ID", "BZD", "bzid"])
+        bzid_col = None
+        for col in ["BZID", "Business ID", "BZD", "bzid"]:
+            if col in df.columns:
+                bzid_col = col
+                break
         if bzid_col is None:
             return pd.DataFrame(columns=["BZID", "Date", "Amount", "Ticket"])
         df["BZID"] = df[bzid_col].astype(str).str.strip().str.upper()
        
-        date_col = find_column(df, ["Date", "date", "Timestamp", "timestamp"])
+        date_col = None
+        for col in ["Date", "date", "Timestamp", "timestamp"]:
+            if col in df.columns:
+                date_col = col
+                break
         if date_col is None:
             return pd.DataFrame(columns=["BZID", "Date", "Amount", "Ticket"])
         df["Date"] = pd.to_datetime(df[date_col], errors="coerce")
@@ -339,13 +286,21 @@ def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_m
         if df.empty:
             return pd.DataFrame(columns=["BZID", "Date", "Amount", "Ticket"])
        
-        amount_col = find_column(df, ["Amount", "amount", "Refund Amount"])
+        amount_col = None
+        for col in ["Amount", "amount", "Refund Amount"]:
+            if col in df.columns:
+                amount_col = col
+                break
         if amount_col:
             df["Amount"] = pd.to_numeric(df[amount_col], errors="coerce").fillna(0)
         else:
             df["Amount"] = 0
        
-        ticket_col = find_column(df, ["Ticket Number", "Ticket ID", "Ticket No", "Ticket Number_1", "Ticket ID_1"])
+        ticket_col = None
+        for col in ["Ticket Number", "Ticket ID", "Ticket No", "Ticket Number_1", "Ticket ID_1"]:
+            if col in df.columns:
+                ticket_col = col
+                break
         if ticket_col:
             df["Ticket"] = df[ticket_col].astype(str)
         else:
@@ -463,7 +418,11 @@ def get_city_analysis(cash_df, jc_df, manual_df, year, current_month):
             return pd.DataFrame(columns=["City", "Amount"])
        
         df = df.copy()
-        date_col = find_column(df, ["Date", "date", "Timestamp", "timestamp"])
+        date_col = None
+        for col in ["Date", "date", "Timestamp", "timestamp"]:
+            if col in df.columns:
+                date_col = col
+                break
         if date_col is None:
             return pd.DataFrame(columns=["City", "Amount"])
        
@@ -473,13 +432,22 @@ def get_city_analysis(cash_df, jc_df, manual_df, year, current_month):
         if df.empty:
             return pd.DataFrame(columns=["City", "Amount"])
        
-        amount_col = find_column(df, ["Amount", "amount", "Refund Amount"])
+        amount_col = None
+        for col in ["Amount", "amount", "Refund Amount"]:
+            if col in df.columns:
+                amount_col = col
+                break
         if amount_col:
             df["Amount"] = pd.to_numeric(df[amount_col], errors="coerce").fillna(0)
         else:
             df["Amount"] = 0
        
-        city_col = find_column(df, ["City", "city", "City Name", "CityName"])
+        city_col = None
+        for col in ["City", "city", "City Name", "CityName"]:
+            if col in df.columns:
+                city_col = col
+                break
+       
         if city_col:
             df["City"] = df[city_col].astype(str).apply(standardize_city_name)
         else:
@@ -510,7 +478,11 @@ def get_hub_analysis(cash_df, jc_df, manual_df, year, current_month):
             return pd.DataFrame(columns=["Hub", "Amount"])
        
         df = df.copy()
-        date_col = find_column(df, ["Date", "date", "Timestamp", "timestamp"])
+        date_col = None
+        for col in ["Date", "date", "Timestamp", "timestamp"]:
+            if col in df.columns:
+                date_col = col
+                break
         if date_col is None:
             return pd.DataFrame(columns=["Hub", "Amount"])
        
@@ -520,13 +492,22 @@ def get_hub_analysis(cash_df, jc_df, manual_df, year, current_month):
         if df.empty:
             return pd.DataFrame(columns=["Hub", "Amount"])
        
-        amount_col = find_column(df, ["Amount", "amount", "Refund Amount"])
+        amount_col = None
+        for col in ["Amount", "amount", "Refund Amount"]:
+            if col in df.columns:
+                amount_col = col
+                break
         if amount_col:
             df["Amount"] = pd.to_numeric(df[amount_col], errors="coerce").fillna(0)
         else:
             df["Amount"] = 0
        
-        hub_col = find_column(df, ["Hub", "hub", "Hub ID", "HUB ID", "Hub Name"])
+        hub_col = None
+        for col in ["Hub", "hub", "Hub ID", "HUB ID", "Hub Name"]:
+            if col in df.columns:
+                hub_col = col
+                break
+       
         if hub_col:
             df["Hub"] = df[hub_col].astype(str)
         else:
@@ -551,11 +532,13 @@ def get_hub_analysis(cash_df, jc_df, manual_df, year, current_month):
 
 # ================= BANK TRANSFER DATA =================
 def get_bank_transfer_data(bank_df, ticket_id):
+    """Search for a ticket by ID in bank transfer sheet"""
     if bank_df.empty:
         return pd.DataFrame()
    
     df = bank_df.copy()
    
+    # Find Ticket ID column (case insensitive)
     ticket_col = None
     for col in df.columns:
         if col and 'ticket' in col.lower() and ('id' in col.lower() or 'no' in col.lower()):
@@ -563,9 +546,11 @@ def get_bank_transfer_data(bank_df, ticket_id):
             break
    
     if ticket_col is None:
-        st.warning("Could not find Ticket ID column")
+        st.warning("⚠️ Could not find Ticket ID column in bank transfer sheet")
+        st.info(f"📋 Available columns: {', '.join(df.columns)}")
         return pd.DataFrame()
    
+    # Filter by ticket ID
     df[ticket_col] = df[ticket_col].astype(str).str.strip()
     ticket_id_str = str(ticket_id).strip()
     df = df[df[ticket_col] == ticket_id_str]
@@ -573,6 +558,7 @@ def get_bank_transfer_data(bank_df, ticket_id):
     if df.empty:
         return pd.DataFrame()
    
+    # Rename columns for better display - using case-insensitive matching
     rename_map = {}
     for col in df.columns:
         col_lower = col.lower() if col else ''
@@ -597,16 +583,20 @@ def get_bank_transfer_data(bank_df, ticket_id):
    
     df = df.rename(columns=rename_map)
    
+    # Standardize city names if City column exists
     if "City" in df.columns:
         df["City"] = df["City"].astype(str).apply(standardize_city_name)
    
+    # Convert date if exists
     if "Date" in df.columns:
         df["Date"] = pd.to_datetime(df["Date"], errors="coerce", dayfirst=True)
         df["Date"] = df["Date"].dt.strftime("%d-%m-%Y")
    
+    # Select only columns we want to display
     display_cols = ["Ticket ID", "Phone Number", "Hub", "City", "Reason", "Amount", "UTR Number", "Status", "Date"]
     df_display = df[[col for col in display_cols if col in df.columns]].copy()
    
+    # Format amount
     if "Amount" in df_display.columns:
         df_display["Amount"] = pd.to_numeric(df_display["Amount"], errors="coerce")
         df_display["Amount"] = df_display["Amount"].apply(lambda x: f"₹{x:.2f}" if pd.notna(x) else "₹0.00")
@@ -614,95 +604,13 @@ def get_bank_transfer_data(bank_df, ticket_id):
    
     return df_display
 
-# ================= FREEBIE CALCULATOR FUNCTIONS =================
-def parse_freebie_offer(offer_text):
-    if pd.isna(offer_text) or offer_text == "":
-        return None, None
-    
-    offer_text = str(offer_text).lower().strip()
-    
-    if '+' in offer_text and not any(word in offer_text for word in ['buy', 'get', 'free']):
-        parts = offer_text.split('+')
-        if len(parts) == 2:
-            try:
-                ordered = int(parts[0].strip())
-                free = int(parts[1].strip())
-                return ordered, free
-            except:
-                pass
-    
-    if 'buy' in offer_text and 'get' in offer_text and 'free' in offer_text:
-        import re
-        numbers = re.findall(r'\d+', offer_text)
-        if len(numbers) >= 2:
-            try:
-                ordered = int(numbers[0])
-                free = int(numbers[1])
-                return ordered, free
-            except:
-                pass
-    
-    if '+' in offer_text:
-        parts = offer_text.split('+')
-        if len(parts) == 2:
-            try:
-                ordered = int(parts[0].strip())
-                free = int(parts[1].strip())
-                return ordered, free
-            except:
-                pass
-    
-    if 'buy' in offer_text and 'get' in offer_text:
-        import re
-        numbers = re.findall(r'\d+', offer_text)
-        if len(numbers) >= 2:
-            try:
-                ordered = int(numbers[0])
-                free = int(numbers[1])
-                return ordered, free
-            except:
-                pass
-    
-    return None, None
-
-def calculate_freebie_refund_from_sheet(row, ordered_qty):
-    freebie_offer = row.get('Mentioned Freebie', '')
-    if pd.isna(freebie_offer) or freebie_offer == '':
-        return 0, "No freebie offer found"
-    
-    refund_value = row.get('Refund value', 0)
-    if isinstance(refund_value, str):
-        refund_value = refund_value.replace('/-', '').strip()
-        try:
-            refund_value = float(refund_value)
-        except:
-            refund_value = 0
-    
-    if refund_value == 0:
-        return 0, "No refund value specified"
-    
-    ordered_required, free_given = parse_freebie_offer(freebie_offer)
-    
-    if ordered_required is None or free_given is None:
-        return 0, f"Could not parse offer: {freebie_offer}"
-    
-    expected_freebies = (ordered_qty // ordered_required) * free_given
-    missing_freebies = expected_freebies
-    
-    if missing_freebies == 0:
-        return 0, f"Customer ordered {ordered_qty} items, needs {ordered_required} for {free_given} freebie(s). No freebies due."
-    
-    refund_amount = missing_freebies * refund_value
-    
-    return refund_amount, f"Missing {missing_freebies} freebie(s) x Rs.{refund_value} = Rs.{refund_amount}"
-
 # ================= REFRESH =================
 if st.button("🔄 Refresh Data"):
     st.cache_data.clear()
     st.rerun()
 
 # ================= TAB SELECTION =================
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["🔍 Individual Search", "🏦 Bank Transfer Refund Details", "📊 High Risk Customers", "🏙️ City Analysis", "🏪 Hub Analysis", "🎁 Freebie Calculator"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["🔍 Individual Search", "🏦 Bank Transfer Refund Details", "📊 High Risk Customers", "🏙️ City Analysis", "🏪 Hub Analysis"])
 
 # ================= TAB 1: Individual Search =================
 with tab1:
@@ -729,33 +637,29 @@ with tab1:
             jc_df = load_sheet(st.secrets["jumbocash_sheet_id"], "Form Responses 1")
             manual_df = load_sheet(st.secrets["cash_upi_sheet_id"], "cash refund")
            
-            # Use find_column for Cash/UPI
-            bzid_col = find_column(cash_df, ["Business ID", "BZID", "bzid"])
-            if bzid_col:
-                cash_df["BZID"] = cash_df[bzid_col].astype(str).str.strip().str.upper()
-            
-            date_col = find_column(cash_df, ["Date", "date", "Timestamp", "timestamp"])
-            if date_col:
-                cash_df["Date"] = pd.to_datetime(cash_df[date_col], errors="coerce")
+            # CASH / UPI
+            cash_df["BZID"] = cash_df["Business ID"].astype(str).str.strip().str.upper()
+            cash_df["Date"] = pd.to_datetime(cash_df["Date"], errors="coerce")
+            if "Timestamp" in cash_df.columns:
+                cash_df["Date"] = cash_df["Date"].fillna(pd.to_datetime(cash_df["Timestamp"], errors="coerce"))
            
             # JUMBOCASH
             jc_df.columns = jc_df.columns.str.strip()
-            bzid_col = find_column(jc_df, ["BZID", "Business ID", "BZD", "bzid"])
-            if bzid_col:
-                jc_df["BZID"] = jc_df[bzid_col].astype(str).str.strip().str.upper()
-            
-            date_col = find_column(jc_df, ["Date", "date", "Timestamp", "timestamp"])
-            if date_col:
-                jc_df["Date"] = pd.to_datetime(jc_df[date_col], errors="coerce")
+            jc_df["BZID"] = jc_df["BZID"].astype(str).str.strip().str.upper()
+            if "date" in jc_df.columns:
+                jc_df["Date"] = pd.to_datetime(jc_df["date"], errors="coerce")
+            elif "Date" in jc_df.columns:
+                jc_df["Date"] = pd.to_datetime(jc_df["Date"], errors="coerce")
+            else:
+                jc_df["Date"] = pd.NaT
+            if "Timestamp" in jc_df.columns:
+                jc_df["Date"] = jc_df["Date"].fillna(pd.to_datetime(jc_df["Timestamp"], errors="coerce"))
            
             # MANUAL CASH
-            bzid_col = find_column(manual_df, ["BZID", "Business ID", "BZD", "bzid"])
-            if bzid_col:
-                manual_df["BZID"] = manual_df[bzid_col].astype(str).str.strip().str.upper()
-            
-            date_col = find_column(manual_df, ["Date", "date", "Timestamp", "timestamp"])
-            if date_col:
-                manual_df["Date"] = pd.to_datetime(manual_df[date_col], errors="coerce")
+            manual_df["BZID"] = manual_df["BZID"].astype(str).str.strip().str.upper()
+            manual_df["Date"] = pd.to_datetime(manual_df["Date"], errors="coerce")
+            if "Timestamp" in manual_df.columns:
+                manual_df["Date"] = manual_df["Date"].fillna(pd.to_datetime(manual_df["Timestamp"], errors="coerce"))
            
             # FILTER BY BZID AND MONTH
             cash_current_matches = cash_df[
@@ -763,60 +667,64 @@ with tab1:
                 (cash_df["Date"].notna()) &
                 (cash_df["Date"].dt.month == month_input) &
                 (cash_df["Date"].dt.year == selected_year)
-            ] if "BZID" in cash_df.columns and "Date" in cash_df.columns else pd.DataFrame()
+            ]
            
             jc_current_matches = jc_df[
                 (jc_df["BZID"] == bzid) &
                 (jc_df["Date"].notna()) &
                 (jc_df["Date"].dt.month == month_input) &
                 (jc_df["Date"].dt.year == selected_year)
-            ] if "BZID" in jc_df.columns and "Date" in jc_df.columns else pd.DataFrame()
+            ]
            
             manual_current_matches = manual_df[
                 (manual_df["BZID"] == bzid) &
                 (manual_df["Date"].notna()) &
                 (manual_df["Date"].dt.month == month_input) &
                 (manual_df["Date"].dt.year == selected_year)
-            ] if "BZID" in manual_df.columns and "Date" in manual_df.columns else pd.DataFrame()
+            ]
            
+            # COUNTS
             cash_count_current = cash_current_matches["Ticket Number"].nunique() if not cash_current_matches.empty else 0
             jc_count_current = jc_current_matches["Ticket ID"].nunique() if not jc_current_matches.empty else 0
             manual_count_current = manual_current_matches["Ticket No"].nunique() if not manual_current_matches.empty else 0
             total_count_current = cash_count_current + jc_count_current + manual_count_current
            
+            # AMOUNTS
             cash_amount_current = pd.to_numeric(cash_current_matches["Amount"], errors="coerce").sum() if not cash_current_matches.empty else 0
             jc_amount_current = pd.to_numeric(jc_current_matches["Amount"], errors="coerce").sum() if not jc_current_matches.empty else 0
             manual_amount_current = pd.to_numeric(manual_current_matches["Amount"], errors="coerce").sum() if not manual_current_matches.empty else 0
             total_amount_current = cash_amount_current + jc_amount_current + manual_amount_current
            
+            # YEARLY TREND
             all_refunds = pd.concat([cash_df[["BZID", "Date"]], jc_df[["BZID", "Date"]], manual_df[["BZID", "Date"]]], ignore_index=True)
             current_year_count = get_refund_count_for_period(all_refunds, bzid, current_year, 1, current_month)
             last_year_count = get_refund_count_for_period(all_refunds, bzid, current_year - 1, 1, current_month)
             month_names, monthly_counts = get_monthly_counts(all_refunds, bzid, current_year)
        
+        # DISPLAY
         col_left, col_right = st.columns([1, 1])
        
         with col_left:
-            st.markdown("## 📊 Current Month")
+            st.markdown(f"## 📊 Current Month")
             st.markdown(f"### {selected_month_label}")
            
             if total_count_current < 5:
-                st.markdown("""
+                st.markdown(f"""
                 <div class="decision-approve">
                     <div class="decision-icon tick-mark">✅</div>
                     <div class="decision-text">
                         <h2 style="color: #28a745; margin: 0;">APPROVED</h2>
-                        <p style="font-size: 18px; margin: 5px 0;">Total Refunds: """ + str(total_count_current) + """ (Less than 5)</p>
+                        <p style="font-size: 18px; margin: 5px 0;">Total Refunds: {total_count_current} (Less than 5)</p>
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
             else:
-                st.markdown("""
+                st.markdown(f"""
                 <div class="decision-deny">
                     <div class="decision-icon cross-mark">❌</div>
                     <div class="decision-text">
                         <h2 style="color: #dc3545; margin: 0;">DENIED</h2>
-                        <p style="font-size: 18px; margin: 5px 0;">Total Refunds: """ + str(total_count_current) + """ (5 or more - Limit reached)</p>
+                        <p style="font-size: 18px; margin: 5px 0;">Total Refunds: {total_count_current} (5 or more - Limit reached)</p>
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
@@ -847,7 +755,7 @@ with tab1:
                 st.metric("📦 Total", total_count_current, f"₹{round(total_amount_current, 2)}")
        
         with col_right:
-            st.markdown("## 📋 Refund Details")
+            st.markdown(f"## 📋 Refund Details")
             st.markdown(f"### {selected_month_label}")
            
             tabs_inner = st.tabs(["💳 Cash/UPI", "🏦 Jumbocash", "💵 Manual Cash"])
@@ -870,6 +778,7 @@ with tab1:
                 else:
                     st.info("No Manual Cash refunds for this month")
        
+        # YEARLY TREND
         st.markdown("---")
         st.markdown(f"## 📈 Yearly Refund Trend (Jan - {datetime(current_year, current_month, 1).strftime('%B')})")
        
@@ -910,6 +819,7 @@ with tab1:
             </div>
             """, unsafe_allow_html=True)
        
+        # Monthly breakdown
         st.markdown("### 📅 Monthly Breakdown")
         monthly_data = []
         for i, month in enumerate(month_names):
@@ -944,22 +854,27 @@ with tab2:
         ticket_id = ticket_id_input.strip()
        
         with st.spinner(f"Searching for Ticket ID: {ticket_id}..."):
+            # Load bank transfer data - using the correct sheet name "CD Refund Sheet"
             bank_df = load_sheet(st.secrets["bank_transfer_sheet_id"], "CD Refund Sheet")
            
             if bank_df.empty:
                 st.warning("⚠️ No data found in the bank transfer sheet. Please check if the sheet has data.")
                 st.stop()
            
+            # Search for ticket in bank transfer sheet
             bank_match = get_bank_transfer_data(bank_df, ticket_id)
        
+        # Display results
         if bank_match.empty:
             st.warning(f"No bank transfer records found for Ticket ID: {ticket_id}")
         else:
             st.success(f"✅ Found {len(bank_match)} bank transfer record(s) for Ticket ID: {ticket_id}")
            
+            # Display Bank Transfer details as a nice card
             st.markdown("---")
             st.markdown("## 📋 Bank Transfer Details")
            
+            # Show as a nice card
             for _, row in bank_match.iterrows():
                 status_color = "#28a745" if str(row.get('Status', '')).lower() == "success" else "#dc3545"
                 st.markdown(f"""
@@ -979,14 +894,17 @@ with tab2:
                 </div>
                 """, unsafe_allow_html=True)
            
+            # Also show as dataframe
             st.markdown("### 📊 Data View")
             st.dataframe(bank_match, use_container_width=True, hide_index=True)
            
+            # Summary
             st.markdown("---")
             st.markdown("## 📊 Summary")
            
             total_amount = 0
             if "Amount (₹)" in bank_match.columns:
+                # Extract numeric values from strings like "₹1234.56"
                 total_amount = bank_match["Amount (₹)"].str.replace("₹", "").str.replace(",", "").astype(float).sum()
            
             col1, col2 = st.columns(2)
@@ -995,6 +913,7 @@ with tab2:
             with col2:
                 st.metric("Total Amount", f"₹{total_amount:,.2f}")
            
+            # Download button
             csv = bank_match.to_csv(index=False)
             st.download_button(
                 "📥 Download Bank Transfer Details",
@@ -1191,244 +1110,6 @@ with tab5:
        
     elif st.session_state.hub_data is not None:
         st.info("✅ No hub data found!")
-
-# ================= TAB 6: Freebie Calculator =================
-with tab6:
-    st.markdown("## 🎁 Freebie Refund Calculator")
-    st.markdown("*Enter BZID, select product and month, enter quantity to calculate refund and get approval decision*")
-    
-    # Load all data
-    try:
-        cash_df = load_sheet(st.secrets["cash_upi_sheet_id"], "Form Responses 1")
-        jc_df = load_sheet(st.secrets["jumbocash_sheet_id"], "Form Responses 1")
-        manual_df = load_sheet(st.secrets["cash_upi_sheet_id"], "cash refund")
-        freebie_df = load_freebie_data()
-    except:
-        cash_df = pd.DataFrame()
-        jc_df = pd.DataFrame()
-        manual_df = pd.DataFrame()
-        freebie_df = pd.DataFrame()
-    
-    if freebie_df.empty:
-        st.error("❌ Could not load freebie data. Please check your configuration.")
-        st.stop()
-    
-    freebie_df = freebie_df.dropna(subset=['Item', 'Mentioned Freebie', 'Refund value'])
-    
-    if freebie_df.empty:
-        st.warning("No freebie data found in the sheet.")
-        st.stop()
-    
-    # Input Section
-    st.markdown("### 📋 Enter Refund Details")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        bzid_input = st.text_input(
-            "Enter BZID",
-            help="Customer Business ID - required for approval decision"
-        )
-        
-        product_options = freebie_df['Item'].unique().tolist()
-        selected_product = st.selectbox(
-            "Select Product",
-            product_options,
-            help="Select the product with freebie offer"
-        )
-    
-    with col2:
-        month_options = {datetime(current_year, i, 1).strftime("%B %Y"): i for i in range(1, 13)}
-        selected_month_label = st.selectbox("Select Month for Refund Count", list(month_options.keys()))
-        selected_month = month_options[selected_month_label]
-        selected_year = int(selected_month_label.split()[-1])
-        
-        ordered_qty = st.number_input(
-            "📦 Quantity Ordered",
-            min_value=0,
-            value=10,
-            step=1,
-            help="Total quantity of the item the customer ordered"
-        )
-    
-    # Get selected product details
-    selected_row = freebie_df[freebie_df['Item'] == selected_product].iloc[0] if selected_product else None
-    
-    if selected_row is not None:
-        freebie_offer = selected_row.get('Mentioned Freebie', '')
-        refund_value = selected_row.get('Refund value', 0)
-        
-        st.info(f"**Freebie Offer:** {freebie_offer} | **Refund Value:** ₹{refund_value}")
-        
-        ordered_required, free_given = parse_freebie_offer(freebie_offer)
-        if ordered_required and free_given:
-            st.info(f"**Offer Details:** Buy {ordered_required} get {free_given} free")
-    
-    # Calculate button
-    if st.button("🧮 Calculate Refund", type="primary"):
-        if not bzid_input:
-            st.error("❌ Please enter BZID")
-            st.stop()
-        
-        bzid = bzid_input.strip().upper()
-        
-        if selected_row is None:
-            st.error("❌ Please select a product")
-            st.stop()
-        
-        if ordered_qty <= 0:
-            st.error("❌ Quantity Ordered must be greater than 0")
-            st.stop()
-        
-        # Calculate freebie refund
-        refund_amount, calculation_details = calculate_freebie_refund_from_sheet(
-            selected_row, ordered_qty
-        )
-        
-        # Get customer's total monthly refund count across all refund types
-        total_monthly_count = get_customer_monthly_refund_count(
-            cash_df, jc_df, manual_df, freebie_df, bzid, selected_month, selected_year
-        )
-        
-        # Display Results
-        st.markdown("---")
-        st.markdown("## 📊 Refund Calculation & Decision")
-        
-        # Show calculation details
-        st.markdown("### 📈 Calculation Breakdown")
-        
-        ordered_required, free_given = parse_freebie_offer(freebie_offer)
-        expected_freebies = (ordered_qty // ordered_required) * free_given if ordered_required else 0
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.markdown("#### Refund Details")
-            st.write(f"**BZID:** {bzid}")
-            st.write(f"**Product:** {selected_product}")
-            st.write(f"**Freebie Offer:** {freebie_offer}")
-            st.write(f"**Quantity Ordered:** {ordered_qty}")
-            st.write(f"**Freebies Expected:** {expected_freebies}")
-            st.write(f"**Refund Value per Freebie:** ₹{refund_value if refund_value else 0}")
-            st.write(f"**Refund Amount:** ₹{refund_amount:.2f}")
-        
-        with col2:
-            st.markdown("#### Decision")
-            st.write(f"**Month:** {selected_month_label}")
-            st.write(f"**Total Monthly Refund Count:** {total_monthly_count}")
-            
-            # Decision logic for freebie refunds:
-            # 1. Must have refund amount > 0
-            # 2. Refund amount must be < ₹100
-            # 3. Total monthly refund count must be < 5
-            
-            if refund_amount == 0:
-                decision = "NO REFUND"
-                color = "#ffc107"
-                message = "No missing freebies found"
-            elif refund_amount >= 100:
-                decision = "❌ DENIED"
-                color = "#dc3545"
-                message = f"Refund amount ₹{refund_amount:.2f} exceeds ₹100 limit"
-            elif total_monthly_count >= 5:
-                decision = "❌ DENIED"
-                color = "#dc3545"
-                message = f"{total_monthly_count} total refund(s) this month (5 or more - Limit reached)"
-            else:
-                decision = "✅ APPROVED"
-                color = "#28a745"
-                message = f"Refund ₹{refund_amount:.2f} (< ₹100) and only {total_monthly_count} refund(s) this month"
-            
-            st.markdown(f"""
-            <div style="background-color: {color}; padding: 20px; border-radius: 10px; color: white; text-align: center;">
-                <h2>{decision}</h2>
-                <p>{message}</p>
-                <p><b>Refund Amount: ₹{refund_amount:.2f}</b></p>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        # Additional details
-        st.markdown("---")
-        st.markdown("### 📋 Detailed Breakdown")
-        
-        st.markdown("""
-        <table class="freebie-table">
-            <tr>
-                <th>Description</th>
-                <th>Value</th>
-            </tr>
-        """, unsafe_allow_html=True)
-        
-        st.markdown(f"""
-            <tr>
-                <td>BZID</td>
-                <td>{bzid}</td>
-            </tr>
-            <tr>
-                <td>Product</td>
-                <td>{selected_product}</td>
-            </tr>
-            <tr>
-                <td>Freebie Offer</td>
-                <td>{freebie_offer}</td>
-            </tr>
-            <tr>
-                <td>Quantity Ordered</td>
-                <td>{ordered_qty}</td>
-            </tr>
-            <tr>
-                <td>Freebies Expected</td>
-                <td>{expected_freebies}</td>
-            </tr>
-            <tr>
-                <td>Refund Value per Freebie</td>
-                <td>₹{refund_value if refund_value else 0}</td>
-            </tr>
-            <tr>
-                <td>Total Refund Amount</td>
-                <td>₹{refund_amount:.2f}</td>
-            </tr>
-            <tr>
-                <td>Monthly Refund Count (All Types)</td>
-                <td>{total_monthly_count}</td>
-            </tr>
-            <tr style="background-color: {'#d4edda' if refund_amount > 0 and refund_amount < 100 and total_monthly_count < 5 else '#f8d7da'}; font-weight: bold;">
-                <td>Decision</td>
-                <td style="color: {'#28a745' if refund_amount > 0 and refund_amount < 100 and total_monthly_count < 5 else '#dc3545' if refund_amount > 0 else '#ffc107'};">
-                    {'✅ APPROVED' if refund_amount > 0 and refund_amount < 100 and total_monthly_count < 5 else '❌ DENIED' if refund_amount > 0 else 'ℹ️ NO REFUND'}
-                </td>
-            </tr>
-            <tr style="background-color: #d4edda; font-weight: bold;">
-                <td>Final Refund Amount</td>
-                <td style="color: #28a745; font-size: 18px;">₹{refund_amount:.2f}</td>
-            </tr>
-        </table>
-        """, unsafe_allow_html=True)
-        
-        # Process Refund Button
-        if refund_amount > 0 and refund_amount < 100 and total_monthly_count < 5:
-            st.markdown("---")
-            st.markdown("### 🚀 Process Refund")
-            
-            if st.button(f"💰 Process ₹{refund_amount:.2f} Directly", type="primary"):
-                st.success(f"✅ Refund of ₹{refund_amount:.2f} initiated successfully for BZID: {bzid}!")
-                st.info("📌 Please verify the refund in the Refund Tracker")
-    
-    # Info box at bottom
-    st.markdown("---")
-    st.markdown("""
-    <div class="freebie-info">
-        <b>📌 Freebie Refund Rules:</b><br>
-        1. Refund amount must be < ₹100 to be approved<br>
-        2. Customer must have less than 5 total refunds in the month<br>
-        3. Both conditions must be met for APPROVAL<br><br>
-        <b>How it works:</b><br>
-        1. Enter the customer's BZID<br>
-        2. Select the product and month<br>
-        3. Enter the quantity the customer ordered<br>
-        4. Click "Calculate Refund" to see the decision
-    </div>
-    """, unsafe_allow_html=True)
 
 # ================= FOOTER =================
 st.markdown("---")
