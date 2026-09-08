@@ -604,13 +604,35 @@ def get_bank_transfer_data(bank_df, ticket_id):
    
     return df_display
 
+# ================= FREEBIE CALCULATOR =================
+def calculate_freebie_refund(ordered_qty, freebie_qty, substitute_price, freebie_value):
+    """
+    Calculate freebie refund based on ordered quantity and freebie quantity
+    """
+    if ordered_qty <= 0:
+        return 0, "Ordered quantity must be greater than 0"
+    
+    if freebie_qty < 0:
+        return 0, "Freebie quantity cannot be negative"
+    
+    # Calculate missing freebies (if freebie_qty < ordered_qty)
+    missing_freebies = max(0, ordered_qty - freebie_qty)
+    
+    if missing_freebies == 0:
+        return 0, "No missing freebies"
+    
+    # Calculate refund amount
+    refund_amount = missing_freebies * freebie_value
+    
+    return refund_amount, f"Missing {missing_freebies} freebies × ₹{freebie_value} = ₹{refund_amount}"
+
 # ================= REFRESH =================
 if st.button("🔄 Refresh Data"):
     st.cache_data.clear()
     st.rerun()
 
 # ================= TAB SELECTION =================
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["🔍 Individual Search", "🏦 Bank Transfer Refund Details", "📊 High Risk Customers", "🏙️ City Analysis", "🏪 Hub Analysis"])
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["🔍 Individual Search", "🏦 Bank Transfer Refund Details", "📊 High Risk Customers", "🏙️ City Analysis", "🏪 Hub Analysis", "🎁 Freebie Calculator"])
 
 # ================= TAB 1: Individual Search =================
 with tab1:
@@ -905,7 +927,7 @@ with tab2:
             total_amount = 0
             if "Amount (₹)" in bank_match.columns:
                 # Extract numeric values from strings like "₹1234.56"
-                total_amount = bank_match["Amount (₹)"].str.replace("₹", "").str.replace(",", "").astype(float).sum()
+                total_amount = bank_match["Amount (₹)"].str.replace("₹", "").str.replace(", "").astype(float).sum()
            
             col1, col2 = st.columns(2)
             with col1:
@@ -1110,6 +1132,216 @@ with tab5:
        
     elif st.session_state.hub_data is not None:
         st.info("✅ No hub data found!")
+
+# ================= TAB 6: Freebie Calculator =================
+with tab6:
+    st.markdown("## 🎁 Freebie Refund Calculator")
+    st.markdown("*Calculate missing freebie refunds based on ordered quantity and freebie quantity*")
+    
+    # Custom CSS for better styling
+    st.markdown("""
+    <style>
+    .freebie-header {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 20px;
+        border-radius: 10px;
+        color: white;
+        margin-bottom: 20px;
+    }
+    .freebie-result {
+        background-color: #f8f9fa;
+        padding: 20px;
+        border-radius: 10px;
+        border: 1px solid #dee2e6;
+        margin-top: 20px;
+    }
+    .freebie-result h3 {
+        color: #28a745;
+    }
+    .freebie-table {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 15px 0;
+    }
+    .freebie-table th {
+        background-color: #f0f2f6;
+        padding: 10px;
+        text-align: left;
+        border: 1px solid #dee2e6;
+    }
+    .freebie-table td {
+        padding: 10px;
+        border: 1px solid #dee2e6;
+    }
+    .freebie-info {
+        background-color: #e7f3ff;
+        padding: 15px;
+        border-radius: 10px;
+        border-left: 4px solid #2196F3;
+        margin: 10px 0;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    
+    # Header
+    st.markdown("""
+    <div class="freebie-header">
+        <h2>📦 Missing Freebie Refund Calculator</h2>
+        <p>Enter the customer's ordered quantity and freebie quantity required. The system will calculate the missing freebies and refund amount.</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Input Section
+    st.markdown("### 📋 Enter Refund Details")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        ordered_qty = st.number_input(
+            "📦 Quantity Ordered",
+            min_value=1,
+            value=10,
+            step=1,
+            help="Total quantity of the item the customer ordered"
+        )
+        
+        substitute_price = st.number_input(
+            "💲 Substitute Price",
+            min_value=0.0,
+            value=10.0,
+            step=1.0,
+            help="Price of the substitute item"
+        )
+    
+    with col2:
+        freebie_qty = st.number_input(
+            "🎁 Freebie Quantity Received",
+            min_value=0,
+            value=0,
+            step=1,
+            help="Quantity of freebies the customer actually received"
+        )
+        
+        freebie_value = st.number_input(
+            "💲 Freebie Value",
+            min_value=0.0,
+            value=5.0,
+            step=1.0,
+            help="Value of each missing freebie"
+        )
+    
+    # Calculate Button
+    if st.button("🧮 Calculate Refund", type="primary"):
+        if ordered_qty <= 0:
+            st.error("❌ Quantity Ordered must be greater than 0")
+        else:
+            refund_amount, calculation_details = calculate_freebie_refund(
+                ordered_qty, freebie_qty, substitute_price, freebie_value
+            )
+            
+            # Display Results
+            st.markdown("---")
+            st.markdown("## 📊 Refund Calculation")
+            
+            if refund_amount > 0:
+                # Show calculation details
+                st.markdown("### 📈 Calculation Breakdown")
+                
+                # Create a nice table showing the calculation
+                st.markdown("""
+                <table class="freebie-table">
+                    <tr>
+                        <th>Description</th>
+                        <th>Value</th>
+                    </tr>
+                """, unsafe_allow_html=True)
+                
+                st.markdown(f"""
+                    <tr>
+                        <td>Quantity Ordered</td>
+                        <td>{ordered_qty}</td>
+                    </tr>
+                    <tr>
+                        <td>Freebie Quantity Received</td>
+                        <td>{freebie_qty}</td>
+                    </tr>
+                    <tr>
+                        <td><b>Missing Freebies</b></td>
+                        <td><b>{ordered_qty - freebie_qty}</b></td>
+                    </tr>
+                    <tr>
+                        <td>Freebie Value</td>
+                        <td>₹{freebie_value:.2f}</td>
+                    </tr>
+                    <tr style="background-color: #d4edda; font-weight: bold;">
+                        <td>Total Refund Amount</td>
+                        <td style="color: #28a745; font-size: 18px;">₹{refund_amount:.2f}</td>
+                    </tr>
+                </table>
+                """, unsafe_allow_html=True)
+                
+                # Show result card with decision
+                st.markdown("### ✅ Refund Decision")
+                
+                if refund_amount < 100:
+                    st.markdown(f"""
+                    <div class="freebie-result" style="border-left: 5px solid #28a745;">
+                        <h3 style="color: #28a745;">✅ APPROVED</h3>
+                        <p style="font-size: 18px;">Refund Amount: <b>₹{refund_amount:.2f}</b></p>
+                        <p><b>Reason:</b> Freebie refund is below ₹100 threshold</p>
+                        <p><b>Details:</b> {calculation_details}</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                else:
+                    st.markdown(f"""
+                    <div class="freebie-result" style="border-left: 5px solid #dc3545;">
+                        <h3 style="color: #dc3545;">❌ REQUIRES REVIEW</h3>
+                        <p style="font-size: 18px;">Refund Amount: <b>₹{refund_amount:.2f}</b></p>
+                        <p><b>Reason:</b> Freebie refund exceeds ₹100 threshold</p>
+                        <p><b>Details:</b> {calculation_details}</p>
+                        <p style="color: #dc3545;">⚠️ Please check in Refund Tracker before processing</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                # Process Refund Button
+                st.markdown("---")
+                st.markdown("### 🚀 Process Refund")
+                
+                col1, col2 = st.columns([1, 2])
+                with col1:
+                    if st.button(f"💰 Process ₹{refund_amount:.2f} Directly", type="primary"):
+                        st.success(f"✅ Refund of ₹{refund_amount:.2f} initiated successfully!")
+                        st.info("📌 Please verify the refund in the Refund Tracker")
+                
+                with col2:
+                    st.markdown("""
+                    <div class="freebie-info">
+                        <b>ℹ️ Note:</b> This will process the refund directly.
+                        <br>For amounts above ₹100, please use the Refund Tracker for approval.
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+            else:
+                st.markdown("""
+                <div class="freebie-result" style="border-left: 5px solid #ffc107;">
+                    <h3 style="color: #ffc107;">ℹ️ NO REFUND REQUIRED</h3>
+                    <p>No missing freebies found. The customer received all freebies.</p>
+                </div>
+                """, unsafe_allow_html=True)
+    
+    # Info box at bottom
+    st.markdown("---")
+    st.markdown("""
+    <div class="freebie-info">
+        <b>📌 How it works:</b><br>
+        1. Enter the quantity the customer ordered<br>
+        2. Enter the freebie quantity the customer received<br>
+        3. Enter the price per freebie<br>
+        4. Click "Calculate Refund" to see the refund amount<br>
+        5. If refund is below ₹100, you can process directly<br>
+        6. If refund is ₹100 or above, please check in Refund Tracker first
+    </div>
+    """, unsafe_allow_html=True)
 
 # ================= FOOTER =================
 st.markdown("---")
