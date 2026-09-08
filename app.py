@@ -188,16 +188,18 @@ monthly_breakdown = {}
 for i, (count, amount) in enumerate(zip(monthly_counts, monthly_amounts)):
     if i < current_month:
         if count > 0:
-            monthly_breakdown[month_abbr[i]] = f"{int(count)} [₹{amount:.0f}]"
+            monthly_breakdown[month_abbr[i]] = "{:.0f} [₹{:.0f}]".format(count, amount)
         else:
             monthly_breakdown[month_abbr[i]] = "0"
 
-activity_status = "🔴 Active" if active_in_last_3 else "⏸️ Inactive"
+activity_status = "Active" if active_in_last_3 else "Inactive"
+activity_icon = "🔴" if active_in_last_3 else "⏸️"
+activity_status_display = f"{activity_icon} {activity_status}"
 
 results.append({
     "BZID": bzid,
     "Risk Level": risk_level,
-    "Status": activity_status,
+    "Status": activity_status_display,
     "Total Refunds": total_refunds,
     "Monthly Average": round(avg_refunds, 2),
     "Months Active": months_with_refunds,
@@ -492,11 +494,9 @@ if ordered_required is None or free_given is None:
 return 0, f"Could not parse offer: {freebie_offer}"
 
 # Calculate how many freebies the customer should get
-# For every ordered_required items, customer gets free_given freebies
 expected_freebies = (ordered_qty // ordered_required) * free_given
 
 # Assume customer got 0 freebies (since they're claiming missing freebies)
-# In reality, you might want to check what they actually received
 missing_freebies = expected_freebies
 
 if missing_freebies == 0:
@@ -608,7 +608,7 @@ col_left, col_right = st.columns([1, 1])
 
 with col_left:
     st.markdown("## 📊 Current Month")
-    st.markdown(f"### {selected_month_label}")
+    st.markdown("### {}".format(selected_month_label))
    
     if total_count_current < 5:
         st.markdown("""
@@ -616,7 +616,7 @@ with col_left:
             <div class="decision-icon tick-mark">✅</div>
             <div class="decision-text">
                 <h2 style="color: #28a745; margin: 0;">APPROVED</h2>
-                <p style="font-size: 18px; margin: 5px 0;">Total Refunds: {}</p>
+                <p style="font-size: 18px; margin: 5px 0;">Total Refunds: {} (Less than 5)</p>
             </div>
         </div>
         """.format(total_count_current), unsafe_allow_html=True)
@@ -650,15 +650,15 @@ with col_left:
    
     c1, c2 = st.columns(2)
     with c1:
-        st.metric("💳 Cash / UPI", cash_count_current, f"₹{round(cash_amount_current, 2)}")
-        st.metric("💵 Manual Cash", manual_count_current, f"₹{round(manual_amount_current, 2)}")
+        st.metric("💳 Cash / UPI", cash_count_current, "₹{:.2f}".format(cash_amount_current))
+        st.metric("💵 Manual Cash", manual_count_current, "₹{:.2f}".format(manual_amount_current))
     with c2:
-        st.metric("🏦 Jumbocash", jc_count_current, f"₹{round(jc_amount_current, 2)}")
-        st.metric("📦 Total", total_count_current, f"₹{round(total_amount_current, 2)}")
+        st.metric("🏦 Jumbocash", jc_count_current, "₹{:.2f}".format(jc_amount_current))
+        st.metric("📦 Total", total_count_current, "₹{:.2f}".format(total_amount_current))
 
 with col_right:
     st.markdown("## 📋 Refund Details")
-    st.markdown(f"### {selected_month_label}")
+    st.markdown("### {}".format(selected_month_label))
    
     tabs_inner = st.tabs(["💳 Cash/UPI", "🏦 Jumbocash", "💵 Manual Cash"])
    
@@ -682,44 +682,45 @@ with col_right:
 
 # YEARLY TREND
 st.markdown("---")
-st.markdown(f"## 📈 Yearly Refund Trend (Jan - {datetime(current_year, current_month, 1).strftime('%B')})")
+st.markdown("## 📈 Yearly Refund Trend (Jan - {})".format(datetime(current_year, current_month, 1).strftime('%B')))
 
 col1, col2, col3 = st.columns([1, 1, 2])
 with col1:
-    st.markdown(f"""
+    st.markdown("""
     <div class="trend-card">
         <p style="margin: 0; opacity: 0.8;">Current Year</p>
-        <h2 style="margin: 5px 0;">{current_year}</h2>
-        <h1 style="margin: 5px 0;">{current_year_count}</h1>
-        <p style="margin: 0; opacity: 0.9;">Jan - {datetime(current_year, current_month, 1).strftime('%b')} Total</p>
+        <h2 style="margin: 5px 0;">{}</h2>
+        <h1 style="margin: 5px 0;">{}</h1>
+        <p style="margin: 0; opacity: 0.9;">Jan - {} Total</p>
     </div>
-    """, unsafe_allow_html=True)
+    """.format(current_year, current_year_count, datetime(current_year, current_month, 1).strftime('%b')), unsafe_allow_html=True)
 
 with col2:
-    st.markdown(f"""
+    st.markdown("""
     <div class="trend-card-previous">
         <p style="margin: 0; opacity: 0.8;">Previous Year</p>
-        <h2 style="margin: 5px 0;">{current_year - 1}</h2>
-        <h1 style="margin: 5px 0;">{last_year_count}</h1>
-        <p style="margin: 0; opacity: 0.9;">Jan - {datetime(current_year, current_month, 1).strftime('%b')} Total</p>
+        <h2 style="margin: 5px 0;">{}</h2>
+        <h1 style="margin: 5px 0;">{}</h1>
+        <p style="margin: 0; opacity: 0.9;">Jan - {} Total</p>
     </div>
-    """, unsafe_allow_html=True)
+    """.format(current_year - 1, last_year_count, datetime(current_year, current_month, 1).strftime('%b')), unsafe_allow_html=True)
 
 with col3:
     if last_year_count > 0:
         change = ((current_year_count - last_year_count) / last_year_count) * 100
         direction = "📈" if change > 0 else "📉" if change < 0 else "➡️"
-        change_text = f"{direction} {abs(change):.1f}%"
+        change_text = "{} {:.1f}%".format(direction, abs(change))
     else:
         change_text = "New data" if current_year_count > 0 else "No data"
    
-    st.markdown(f"""
+    color = "#28a745" if current_year_count >= last_year_count else "#dc3545"
+    st.markdown("""
     <div style="background-color: #f8f9fa; border-radius: 10px; padding: 20px; height: 100%; display: flex; flex-direction: column; justify-content: center;">
-        <p style="margin: 0; color: #6c757d; font-size: 14px;">Year-over-Year Change<br><small style="color: #999;">(Jan - {datetime(current_year, current_month, 1).strftime('%b')})</small></p>
-        <h2 style="margin: 5px 0; color: {'#28a745' if current_year_count >= last_year_count else '#dc3545'}">{change_text}</h2>
-        <p style="margin: 0; color: #6c757d; font-size: 14px;">{current_year_count} vs {last_year_count} refunds</p>
+        <p style="margin: 0; color: #6c757d; font-size: 14px;">Year-over-Year Change<br><small style="color: #999;">(Jan - {})</small></p>
+        <h2 style="margin: 5px 0; color: {};">{}</h2>
+        <p style="margin: 0; color: #6c757d; font-size: 14px;">{} vs {} refunds</p>
     </div>
-    """, unsafe_allow_html=True)
+    """.format(datetime(current_year, current_month, 1).strftime('%b'), color, change_text, current_year_count, last_year_count), unsafe_allow_html=True)
 
 # Monthly breakdown
 st.markdown("### 📅 Monthly Breakdown")
@@ -755,8 +756,8 @@ if not ticket_id_input:
 
 ticket_id = ticket_id_input.strip()
 
-with st.spinner(f"Searching for Ticket ID: {ticket_id}..."):
-    # Load bank transfer data - using the correct sheet name "CD Refund Sheet"
+with st.spinner("Searching for Ticket ID: {}".format(ticket_id)):
+    # Load bank transfer data
     bank_df = load_sheet(st.secrets["bank_transfer_sheet_id"], "CD Refund Sheet")
    
     if bank_df.empty:
@@ -768,9 +769,9 @@ with st.spinner(f"Searching for Ticket ID: {ticket_id}..."):
 
 # Display results
 if bank_match.empty:
-    st.warning(f"No bank transfer records found for Ticket ID: {ticket_id}")
+    st.warning("No bank transfer records found for Ticket ID: {}".format(ticket_id))
 else:
-    st.success(f"✅ Found {len(bank_match)} bank transfer record(s) for Ticket ID: {ticket_id}")
+    st.success("✅ Found {} bank transfer record(s) for Ticket ID: {}".format(len(bank_match), ticket_id))
    
     # Display Bank Transfer details as a nice card
     st.markdown("---")
@@ -779,22 +780,33 @@ else:
     # Show as a nice card
     for _, row in bank_match.iterrows():
         status_color = "#28a745" if str(row.get('Status', '')).lower() == "success" else "#dc3545"
-        st.markdown(f"""
+        st.markdown("""
         <div style="background-color: #f8f9fa; padding: 20px; border-radius: 10px; margin: 10px 0; border: 1px solid #dee2e6;">
             <h4>💰 Bank Transfer Information</h4>
             <table style="width: 100%; border-collapse: collapse;">
-                <tr><td style="padding: 8px; font-weight: bold; width: 40%;">Ticket ID:</td><td style="padding: 8px;">{row.get('Ticket ID', 'N/A')}</td></tr>
-                <tr><td style="padding: 8px; font-weight: bold;">Phone Number:</td><td style="padding: 8px;">{row.get('Phone Number', 'N/A')}</td></tr>
-                <tr><td style="padding: 8px; font-weight: bold;">Hub:</td><td style="padding: 8px;">{row.get('Hub', 'N/A')}</td></tr>
-                <tr><td style="padding: 8px; font-weight: bold;">City:</td><td style="padding: 8px;">{row.get('City', 'N/A')}</td></tr>
-                <tr><td style="padding: 8px; font-weight: bold;">Reason:</td><td style="padding: 8px;">{row.get('Reason', 'N/A')}</td></tr>
-                <tr><td style="padding: 8px; font-weight: bold;">Amount:</td><td style="padding: 8px; color: #28a745; font-weight: bold;">{row.get('Amount (₹)', 'N/A')}</td></tr>
-                <tr><td style="padding: 8px; font-weight: bold;">UTR Number:</td><td style="padding: 8px; font-family: monospace;">{row.get('UTR Number', 'N/A')}</td></tr>
-                <tr><td style="padding: 8px; font-weight: bold;">Status:</td><td style="padding: 8px; color: {status_color}; font-weight: bold;">{row.get('Status', 'N/A')}</td></tr>
-                <tr><td style="padding: 8px; font-weight: bold;">Date:</td><td style="padding: 8px;">{row.get('Date', 'N/A')}</td></tr>
+                <tr><td style="padding: 8px; font-weight: bold; width: 40%;">Ticket ID:</td><td style="padding: 8px;">{}</td></tr>
+                <tr><td style="padding: 8px; font-weight: bold;">Phone Number:</td><td style="padding: 8px;">{}</td></tr>
+                <tr><td style="padding: 8px; font-weight: bold;">Hub:</td><td style="padding: 8px;">{}</td></tr>
+                <tr><td style="padding: 8px; font-weight: bold;">City:</td><td style="padding: 8px;">{}</td></tr>
+                <tr><td style="padding: 8px; font-weight: bold;">Reason:</td><td style="padding: 8px;">{}</td></tr>
+                <tr><td style="padding: 8px; font-weight: bold;">Amount:</td><td style="padding: 8px; color: #28a745; font-weight: bold;">{}</td></tr>
+                <tr><td style="padding: 8px; font-weight: bold;">UTR Number:</td><td style="padding: 8px; font-family: monospace;">{}</td></tr>
+                <tr><td style="padding: 8px; font-weight: bold;">Status:</td><td style="padding: 8px; color: {}; font-weight: bold;">{}</td></tr>
+                <tr><td style="padding: 8px; font-weight: bold;">Date:</td><td style="padding: 8px;">{}</td></tr>
             </table>
         </div>
-        """, unsafe_allow_html=True)
+        """.format(
+            row.get('Ticket ID', 'N/A'),
+            row.get('Phone Number', 'N/A'),
+            row.get('Hub', 'N/A'),
+            row.get('City', 'N/A'),
+            row.get('Reason', 'N/A'),
+            row.get('Amount (₹)', 'N/A'),
+            row.get('UTR Number', 'N/A'),
+            status_color,
+            row.get('Status', 'N/A'),
+            row.get('Date', 'N/A')
+        ), unsafe_allow_html=True)
    
     # Also show as dataframe
     st.markdown("### 📊 Data View")
@@ -806,21 +818,20 @@ else:
    
     total_amount = 0
     if "Amount (₹)" in bank_match.columns:
-        # Extract numeric values from strings like "₹1234.56"
         total_amount = bank_match["Amount (₹)"].str.replace("₹", "").str.replace(",", "").astype(float).sum()
    
     col1, col2 = st.columns(2)
     with col1:
         st.metric("Total Records", len(bank_match))
     with col2:
-        st.metric("Total Amount", f"₹{total_amount:,.2f}")
+        st.metric("Total Amount", "₹{:.2f}".format(total_amount))
    
     # Download button
     csv = bank_match.to_csv(index=False)
     st.download_button(
         "📥 Download Bank Transfer Details",
         data=csv,
-        file_name=f"bank_transfer_{ticket_id}.csv",
+        file_name="bank_transfer_{}.csv".format(ticket_id),
         mime="text/csv"
     )
 
@@ -860,7 +871,7 @@ high_risk_df["Risk_Order"] = high_risk_df["Risk Level"].map(risk_order)
 high_risk_df = high_risk_df.sort_values(["Risk_Order", "Total Amount"], ascending=[True, False])
 high_risk_df = high_risk_df.drop(columns=["Risk_Order"])
 
-st.success(f"Found {len(high_risk_df)} high-risk customers")
+st.success("Found {} high-risk customers".format(len(high_risk_df)))
 
 col1, col2, col3, col4, col5 = st.columns(5)
 with col1:
@@ -872,7 +883,7 @@ with col3:
 with col4:
     st.metric("🟡 Potential", len(high_risk_df[high_risk_df["Risk Level"] == "🟡 POTENTIAL"]))
 with col5:
-    st.metric("Total Amount", f"₹{high_risk_df['Total Amount'].sum():,.2f}")
+    st.metric("Total Amount", "₹{:.2f}".format(high_risk_df['Total Amount'].sum()))
 
 month_abbr = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][:current_month]
 
@@ -910,7 +921,7 @@ st.dataframe(
 )
 
 csv = high_risk_df.to_csv(index=False)
-st.download_button("📥 Download Report", data=csv, file_name=f"high_risk_customers_{current_year}.csv", mime="text/csv")
+st.download_button("📥 Download Report", data=csv, file_name="high_risk_customers_{}.csv".format(current_year), mime="text/csv")
 
 elif st.session_state.high_risk_data is not None:
 st.info("✅ No high-risk customers found!")
@@ -945,7 +956,7 @@ with col1:
 with col2:
     st.metric("Total Instances", city_df["Total_Instances"].sum())
 with col3:
-    st.metric("Total Amount", f"₹{city_df['Total_Amount'].sum():,.2f}")
+    st.metric("Total Amount", "₹{:.2f}".format(city_df['Total_Amount'].sum()))
 
 st.dataframe(
     city_df,
@@ -994,7 +1005,7 @@ with col1:
 with col2:
     st.metric("Total Instances", hub_df["Total_Instances"].sum())
 with col3:
-    st.metric("Total Amount", f"₹{hub_df['Total_Amount'].sum():,.2f}")
+    st.metric("Total Amount", "₹{:.2f}".format(hub_df['Total_Amount'].sum()))
 
 st.dataframe(
     hub_df,
@@ -1064,13 +1075,13 @@ if selected_row is not None:
     freebie_offer = selected_row.get('Mentioned Freebie', '')
     refund_value = selected_row.get('Refund value', '')
     
-    st.info(f"**Freebie Offer:** {freebie_offer}")
-    st.info(f"**Refund Value:** {refund_value}")
+    st.info("**Freebie Offer:** {}".format(freebie_offer))
+    st.info("**Refund Value:** {}".format(refund_value))
     
     # Parse the offer to show expected freebies
     ordered_required, free_given = parse_freebie_offer(freebie_offer)
     if ordered_required and free_given:
-        st.info(f"**Offer Details:** Buy {ordered_required} get {free_given} free")
+        st.info("**Offer Details:** Buy {} get {} free".format(ordered_required, free_given))
     else:
         st.warning("⚠️ Could not parse offer format. Please check the offer text.")
 
@@ -1116,56 +1127,63 @@ else:
             </tr>
         """, unsafe_allow_html=True)
         
-        st.markdown(f"""
+        st.markdown("""
             <tr>
                 <td>Product</td>
-                <td>{selected_product}</td>
+                <td>{}</td>
             </tr>
             <tr>
                 <td>Freebie Offer</td>
-                <td>{freebie_offer}</td>
+                <td>{}</td>
             </tr>
             <tr>
                 <td>Quantity Ordered</td>
-                <td>{ordered_qty}</td>
+                <td>{}</td>
             </tr>
             <tr>
                 <td>Freebies Expected</td>
-                <td>{expected_freebies}</td>
+                <td>{}</td>
             </tr>
             <tr>
                 <td>Refund Value per Freebie</td>
-                <td>₹{refund_value if refund_value else 0}</td>
+                <td>₹{}</td>
             </tr>
             <tr style="background-color: #d4edda; font-weight: bold;">
                 <td>Total Refund Amount</td>
-                <td style="color: #28a745; font-size: 18px;">₹{refund_amount:.2f}</td>
+                <td style="color: #28a745; font-size: 18px;">₹{:.2f}</td>
             </tr>
         </table>
-        """, unsafe_allow_html=True)
+        """.format(
+            selected_product,
+            freebie_offer,
+            ordered_qty,
+            expected_freebies,
+            refund_value if refund_value else 0,
+            refund_amount
+        ), unsafe_allow_html=True)
         
         # Show result card with decision
         st.markdown("### ✅ Refund Decision")
         
         if refund_amount < 100:
-            st.markdown(f"""
+            st.markdown("""
             <div class="freebie-result" style="border-left: 5px solid #28a745;">
                 <h3 style="color: #28a745;">✅ APPROVED</h3>
-                <p style="font-size: 18px;">Refund Amount: <b>₹{refund_amount:.2f}</b></p>
+                <p style="font-size: 18px;">Refund Amount: <b>₹{:.2f}</b></p>
                 <p><b>Reason:</b> Freebie refund is below ₹100 threshold</p>
-                <p><b>Details:</b> {calculation_details}</p>
+                <p><b>Details:</b> {}</p>
             </div>
-            """, unsafe_allow_html=True)
+            """.format(refund_amount, calculation_details), unsafe_allow_html=True)
         else:
-            st.markdown(f"""
+            st.markdown("""
             <div class="freebie-result" style="border-left: 5px solid #dc3545;">
                 <h3 style="color: #dc3545;">❌ REQUIRES REVIEW</h3>
-                <p style="font-size: 18px;">Refund Amount: <b>₹{refund_amount:.2f}</b></p>
+                <p style="font-size: 18px;">Refund Amount: <b>₹{:.2f}</b></p>
                 <p><b>Reason:</b> Freebie refund exceeds ₹100 threshold</p>
-                <p><b>Details:</b> {calculation_details}</p>
+                <p><b>Details:</b> {}</p>
                 <p style="color: #dc3545;">⚠️ Please check in Refund Tracker before processing</p>
             </div>
-            """, unsafe_allow_html=True)
+            """.format(refund_amount, calculation_details), unsafe_allow_html=True)
         
         # Process Refund Button
         st.markdown("---")
@@ -1173,8 +1191,8 @@ else:
         
         col1, col2 = st.columns([1, 2])
         with col1:
-            if st.button(f"💰 Process ₹{refund_amount:.2f} Directly", type="primary"):
-                st.success(f"✅ Refund of ₹{refund_amount:.2f} initiated successfully!")
+            if st.button("💰 Process ₹{:.2f} Directly".format(refund_amount), type="primary"):
+                st.success("✅ Refund of ₹{:.2f} initiated successfully!".format(refund_amount))
                 st.info("📌 Please verify the refund in the Refund Tracker")
         
         with col2:
