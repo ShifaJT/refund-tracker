@@ -126,12 +126,11 @@ def load_sheet(sheet_id, sheet_name):
         header_row_idx = None
         for i, row in enumerate(data):
             row_str = ' '.join(str(cell).lower() for cell in row if cell)
-            if 'ticket id' in row_str and 'phone number' in row_str and 'hub' in row_str:
+            if 'item' in row_str and 'freebie' in row_str:
                 header_row_idx = i
                 break
        
         if header_row_idx is None:
-            st.warning("Could not find standard header row. Using first row as headers.")
             header_row_idx = 0
        
         headers = [str(col).strip() if col else f"Column_{i}" for i, col in enumerate(data[header_row_idx])]
@@ -140,7 +139,7 @@ def load_sheet(sheet_id, sheet_name):
         for row in data[header_row_idx + 1:]:
             if any(cell for cell in row):
                 non_empty = sum(1 for cell in row if cell and str(cell).strip())
-                if non_empty >= 3:
+                if non_empty >= 2:
                     data_rows.append(row)
        
         if not data_rows:
@@ -156,17 +155,6 @@ def load_sheet(sheet_id, sheet_name):
        
         df = pd.DataFrame(data_rows, columns=headers)
         df.columns = df.columns.str.strip()
-       
-        ticket_col = None
-        for col in ["Ticket ID", "Ticket id", "Ticket Id", "ticket id", "Ticket Number", "Ticket No"]:
-            if col in df.columns:
-                ticket_col = col
-                break
-       
-        if ticket_col:
-            df[ticket_col] = df[ticket_col].astype(str).str.strip()
-            df = df[df[ticket_col].str.isnumeric() | df[ticket_col].str.match(r'^\d+$') | df[ticket_col].str.match(r'^[A-Za-z]\d+$')]
-       
         df = fix_duplicate_columns(df)
        
         return df
@@ -184,10 +172,26 @@ def load_freebie_data():
     try:
         freebie_sheet_id = st.secrets["freebie_sheet_id"]
         freebie_df = load_sheet(freebie_sheet_id, "Sheet1")
+        
+        if not freebie_df.empty:
+            # Clean column names
+            freebie_df.columns = freebie_df.columns.str.strip()
+            
+            # Check for required columns
+            required_cols = ['Item', 'Mentioned Freebie', 'Refund value']
+            missing_cols = [col for col in required_cols if col not in freebie_df.columns]
+            
+            if missing_cols:
+                st.error(f"Missing columns: {missing_cols}")
+                st.info("Please make sure your sheet has columns: 'Item', 'Mentioned Freebie', 'Refund value'")
+                return pd.DataFrame()
+        
         return freebie_df
-    except:
+    except KeyError:
         st.error("'freebie_sheet_id' not found in secrets!")
-        st.info("Add 'freebie_sheet_id' to secrets.toml")
+        return pd.DataFrame()
+    except Exception as e:
+        st.error(f"Error loading freebie data: {str(e)}")
         return pd.DataFrame()
 
 # ================= GET REFUND COUNT =================
@@ -666,6 +670,36 @@ def calculate_freebie_refund_from_sheet(row, ordered_qty):
     
     return refund_amount, f"Missing {missing_freebies} freebie(s) x Rs.{refund_value} = Rs.{refund_amount}"
 
+# ================= FREEBIE MONTHLY COUNT =================
+@st.cache_data(ttl=300)
+def get_freebie_monthly_count(freebie_df, selected_product, month, year):
+    """Get monthly refund count for a specific product/month"""
+    if freebie_df.empty:
+        return 0
+    
+    # Count how many refunds this product has in this month
+    # We need to count based on the date column
+    date_col = None
+    for col in freebie_df.columns:
+        if 'date' in col.lower():
+            date_col = col
+            break
+    
+    if date_col is None:
+        return 0
+    
+    # Convert date column
+    freebie_df[date_col] = pd.to_datetime(freebie_df[date_col], errors="coerce")
+    
+    # Filter by product and month/year
+    filtered = freebie_df[
+        (freebie_df['Item'] == selected_product) &
+        (freebie_df[date_col].dt.month == month) &
+        (freebie_df[date_col].dt.year == year)
+    ]
+    
+    return len(filtered)
+
 # ================= REFRESH =================
 if st.button("🔄 Refresh Data"):
     st.cache_data.clear()
@@ -699,13 +733,11 @@ with tab1:
             jc_df = load_sheet(st.secrets["jumbocash_sheet_id"], "Form Responses 1")
             manual_df = load_sheet(st.secrets["cash_upi_sheet_id"], "cash refund")
            
-            # CASH / UPI
             cash_df["BZID"] = cash_df["Business ID"].astype(str).str.strip().str.upper()
             cash_df["Date"] = pd.to_datetime(cash_df["Date"], errors="coerce")
             if "Timestamp" in cash_df.columns:
                 cash_df["Date"] = cash_df["Date"].fillna(pd.to_datetime(cash_df["Timestamp"], errors="coerce"))
            
-            # JUMBOCASH
             jc_df.columns = jc_df.columns.str.strip()
             jc_df["BZID"] = jc_df["BZID"].astype(str).str.strip().str.upper()
             if "date" in jc_df.columns:
@@ -717,13 +749,11 @@ with tab1:
             if "Timestamp" in jc_df.columns:
                 jc_df["Date"] = jc_df["Date"].fillna(pd.to_datetime(jc_df["Timestamp"], errors="coerce"))
            
-            # MANUAL CASH
             manual_df["BZID"] = manual_df["BZID"].astype(str).str.strip().str.upper()
             manual_df["Date"] = pd.to_datetime(manual_df["Date"], errors="coerce")
             if "Timestamp" in manual_df.columns:
                 manual_df["Date"] = manual_df["Date"].fillna(pd.to_datetime(manual_df["Timestamp"], errors="coerce"))
            
-            # FILTER BY BZID AND MONTH
             cash_current_matches = cash_df[
                 (cash_df["BZID"] == bzid) &
                 (cash_df["Date"].notna()) &
@@ -1161,8 +1191,9 @@ with tab5:
 # ================= TAB 6: Freebie Calculator =================
 with tab6:
     st.markdown("## 🎁 Freebie Refund Calculator")
-    st.markdown("*Select a product and freebie offer, enter ordered quantity, and calculate missing freebies refund*")
+    st.markdown("*Select product, month, and enter quantity to calculate refund and get approval decision*")
     
+    # Load freebie data
     freebie_df = load_freebie_data()
     
     if freebie_df.empty:
@@ -1171,20 +1202,12 @@ with tab6:
     
     freebie_df = freebie_df.dropna(subset=['Item', 'Mentioned Freebie', 'Refund value'])
     
-    st.markdown("### 📋 Available Freebie Offers")
-    st.dataframe(
-        freebie_df[['Item', 'Mentioned Freebie', 'Refund value']],
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Item": st.column_config.TextColumn("Product Item"),
-            "Mentioned Freebie": st.column_config.TextColumn("Freebie Offer"),
-            "Refund value": st.column_config.TextColumn("Refund Value")
-        }
-    )
+    if freebie_df.empty:
+        st.warning("No freebie data found in the sheet.")
+        st.stop()
     
-    st.markdown("---")
-    st.markdown("### 🔍 Calculate Refund")
+    # Display product selection
+    st.markdown("### 📋 Select Freebie Details")
     
     col1, col2 = st.columns(2)
     
@@ -1193,25 +1216,31 @@ with tab6:
         selected_product = st.selectbox(
             "Select Product",
             product_options,
-            help="Select the product from the list"
+            help="Select the product with freebie offer"
         )
     
+    with col2:
+        # Month selection for freebie count
+        month_options = {datetime(current_year, i, 1).strftime("%B %Y"): i for i in range(1, 13)}
+        selected_month_label = st.selectbox("Select Month for Refund Count", list(month_options.keys()))
+        selected_month = month_options[selected_month_label]
+        selected_year = int(selected_month_label.split()[-1])
+    
+    # Get selected product details
     selected_row = freebie_df[freebie_df['Item'] == selected_product].iloc[0] if selected_product else None
     
-    with col2:
-        if selected_row is not None:
-            freebie_offer = selected_row.get('Mentioned Freebie', '')
-            refund_value = selected_row.get('Refund value', '')
-            
-            st.info(f"**Freebie Offer:** {freebie_offer}")
-            st.info(f"**Refund Value:** {refund_value}")
-            
-            ordered_required, free_given = parse_freebie_offer(freebie_offer)
-            if ordered_required and free_given:
-                st.info(f"**Offer Details:** Buy {ordered_required} get {free_given} free")
-            else:
-                st.warning("⚠️ Could not parse offer format. Please check the offer text.")
+    if selected_row is not None:
+        freebie_offer = selected_row.get('Mentioned Freebie', '')
+        refund_value = selected_row.get('Refund value', 0)
+        
+        st.info(f"**Freebie Offer:** {freebie_offer} | **Refund Value:** ₹{refund_value}")
+        
+        # Parse offer
+        ordered_required, free_given = parse_freebie_offer(freebie_offer)
+        if ordered_required and free_given:
+            st.info(f"**Offer Details:** Buy {ordered_required} get {free_given} free")
     
+    # Enter ordered quantity
     ordered_qty = st.number_input(
         "📦 Quantity Ordered",
         min_value=0,
@@ -1220,120 +1249,141 @@ with tab6:
         help="Total quantity of the item the customer ordered"
     )
     
+    # Calculate button
     if st.button("🧮 Calculate Refund", type="primary"):
         if selected_row is None:
             st.error("❌ Please select a product")
         elif ordered_qty <= 0:
             st.error("❌ Quantity Ordered must be greater than 0")
         else:
+            # Calculate freebie refund
             refund_amount, calculation_details = calculate_freebie_refund_from_sheet(
                 selected_row, ordered_qty
             )
             
-            st.markdown("---")
-            st.markdown("## 📊 Refund Calculation")
+            # Get monthly refund count for this product
+            monthly_count = get_freebie_monthly_count(freebie_df, selected_product, selected_month, selected_year)
             
-            if refund_amount > 0:
-                st.markdown("### 📈 Calculation Breakdown")
+            # Display Results
+            st.markdown("---")
+            st.markdown("## 📊 Refund Calculation & Decision")
+            
+            # Show calculation details
+            st.markdown("### 📈 Calculation Breakdown")
+            
+            # Parse the offer for display
+            ordered_required, free_given = parse_freebie_offer(freebie_offer)
+            expected_freebies = (ordered_qty // ordered_required) * free_given if ordered_required else 0
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("#### Refund Details")
+                st.write(f"**Product:** {selected_product}")
+                st.write(f"**Freebie Offer:** {freebie_offer}")
+                st.write(f"**Quantity Ordered:** {ordered_qty}")
+                st.write(f"**Freebies Expected:** {expected_freebies}")
+                st.write(f"**Refund Value per Freebie:** ₹{refund_value if refund_value else 0}")
+                st.write(f"**Refund Amount:** ₹{refund_amount:.2f}")
+            
+            with col2:
+                st.markdown("#### Decision")
+                st.write(f"**Month:** {selected_month_label}")
+                st.write(f"**Monthly Refund Count:** {monthly_count}")
                 
-                freebie_offer = selected_row.get('Mentioned Freebie', '')
-                ordered_required, free_given = parse_freebie_offer(freebie_offer)
-                expected_freebies = (ordered_qty // ordered_required) * free_given if ordered_required else 0
-                
-                st.markdown("""
-                <table class="freebie-table">
-                    <tr>
-                        <th>Description</th>
-                        <th>Value</th>
-                    </tr>
-                """, unsafe_allow_html=True)
+                # Decision based on monthly count
+                if refund_amount == 0:
+                    decision = "NO REFUND"
+                    color = "#ffc107"
+                    message = "No missing freebies found"
+                elif monthly_count < 5:
+                    decision = "✅ APPROVED"
+                    color = "#28a745"
+                    message = f"Only {monthly_count} refund(s) this month (Less than 5)"
+                else:
+                    decision = "❌ DENIED"
+                    color = "#dc3545"
+                    message = f"{monthly_count} refund(s) this month (5 or more - Limit reached)"
                 
                 st.markdown(f"""
-                    <tr>
-                        <td>Product</td>
-                        <td>{selected_product}</td>
-                    </tr>
-                    <tr>
-                        <td>Freebie Offer</td>
-                        <td>{freebie_offer}</td>
-                    </tr>
-                    <tr>
-                        <td>Quantity Ordered</td>
-                        <td>{ordered_qty}</td>
-                    </tr>
-                    <tr>
-                        <td>Freebies Expected</td>
-                        <td>{expected_freebies}</td>
-                    </tr>
-                    <tr>
-                        <td>Refund Value per Freebie</td>
-                        <td>₹{refund_value if refund_value else 0}</td>
-                    </tr>
-                    <tr style="background-color: #d4edda; font-weight: bold;">
-                        <td>Total Refund Amount</td>
-                        <td style="color: #28a745; font-size: 18px;">₹{refund_amount:.2f}</td>
-                    </tr>
-                </table>
+                <div style="background-color: {color}; padding: 20px; border-radius: 10px; color: white; text-align: center;">
+                    <h2>{decision}</h2>
+                    <p>{message}</p>
+                    <p><b>Refund Amount: ₹{refund_amount:.2f}</b></p>
+                </div>
                 """, unsafe_allow_html=True)
-                
-                st.markdown("### ✅ Refund Decision")
-                
-                if refund_amount < 100:
-                    st.markdown(f"""
-                    <div class="freebie-result" style="border-left: 5px solid #28a745;">
-                        <h3 style="color: #28a745;">✅ APPROVED</h3>
-                        <p style="font-size: 18px;">Refund Amount: <b>₹{refund_amount:.2f}</b></p>
-                        <p><b>Reason:</b> Freebie refund is below ₹100 threshold</p>
-                        <p><b>Details:</b> {calculation_details}</p>
-                    </div>
-                    """, unsafe_allow_html=True)
-                else:
-                    st.markdown(f"""
-                    <div class="freebie-result" style="border-left: 5px solid #dc3545;">
-                        <h3 style="color: #dc3545;">❌ REQUIRES REVIEW</h3>
-                        <p style="font-size: 18px;">Refund Amount: <b>₹{refund_amount:.2f}</b></p>
-                        <p><b>Reason:</b> Freebie refund exceeds ₹100 threshold</p>
-                        <p><b>Details:</b> {calculation_details}</p>
-                        <p style="color: #dc3545;">⚠️ Please check in Refund Tracker before processing</p>
-                    </div>
-                    """, unsafe_allow_html=True)
-                
+            
+            # Additional details
+            st.markdown("---")
+            st.markdown("### 📋 Detailed Breakdown")
+            
+            st.markdown("""
+            <table class="freebie-table">
+                <tr>
+                    <th>Description</th>
+                    <th>Value</th>
+                </tr>
+            """, unsafe_allow_html=True)
+            
+            st.markdown(f"""
+                <tr>
+                    <td>Product</td>
+                    <td>{selected_product}</td>
+                </tr>
+                <tr>
+                    <td>Freebie Offer</td>
+                    <td>{freebie_offer}</td>
+                </tr>
+                <tr>
+                    <td>Quantity Ordered</td>
+                    <td>{ordered_qty}</td>
+                </tr>
+                <tr>
+                    <td>Freebies Expected</td>
+                    <td>{expected_freebies}</td>
+                </tr>
+                <tr>
+                    <td>Refund Value per Freebie</td>
+                    <td>₹{refund_value if refund_value else 0}</td>
+                </tr>
+                <tr>
+                    <td>Monthly Refund Count</td>
+                    <td>{monthly_count}</td>
+                </tr>
+                <tr style="background-color: {'#d4edda' if monthly_count < 5 else '#f8d7da'}; font-weight: bold;">
+                    <td>Decision</td>
+                    <td style="color: {'#28a745' if monthly_count < 5 else '#dc3545'};">
+                        {'✅ APPROVED' if monthly_count < 5 else '❌ DENIED'}
+                    </td>
+                </tr>
+                <tr style="background-color: #d4edda; font-weight: bold;">
+                    <td>Total Refund Amount</td>
+                    <td style="color: #28a745; font-size: 18px;">₹{refund_amount:.2f}</td>
+                </tr>
+            </table>
+            """, unsafe_allow_html=True)
+            
+            # Process Refund Button
+            if refund_amount > 0 and monthly_count < 5:
                 st.markdown("---")
                 st.markdown("### 🚀 Process Refund")
                 
-                col1, col2 = st.columns([1, 2])
-                with col1:
-                    if st.button(f"💰 Process ₹{refund_amount:.2f} Directly", type="primary"):
-                        st.success(f"✅ Refund of ₹{refund_amount:.2f} initiated successfully!")
-                        st.info("📌 Please verify the refund in the Refund Tracker")
-                
-                with col2:
-                    st.markdown("""
-                    <div class="freebie-info">
-                        <b>ℹ️ Note:</b> This will process the refund directly.
-                        <br>For amounts above ₹100, please use the Refund Tracker for approval.
-                    </div>
-                    """, unsafe_allow_html=True)
-                
-            else:
-                st.markdown(f"""
-                <div class="freebie-result" style="border-left: 5px solid #ffc107;">
-                    <h3 style="color: #ffc107;">ℹ️ NO REFUND REQUIRED</h3>
-                    <p>No missing freebies found. The customer received all freebies.</p>
-                    <p><b>Details:</b> {calculation_details}</p>
-                </div>
-                """, unsafe_allow_html=True)
+                if st.button(f"💰 Process ₹{refund_amount:.2f} Directly", type="primary"):
+                    st.success(f"✅ Refund of ₹{refund_amount:.2f} initiated successfully!")
+                    st.info("📌 Please verify the refund in the Refund Tracker")
     
+    # Info box at bottom
     st.markdown("---")
     st.markdown("""
     <div class="freebie-info">
         <b>📌 How it works:</b><br>
         1. Select a product from the list above<br>
-        2. The system will show the freebie offer and refund value<br>
+        2. Select the month for the refund count<br>
         3. Enter the quantity the customer ordered<br>
-        4. Click "Calculate Refund" to see the refund amount<br>
-        5. If refund is below ₹100, you can process directly<br>
-        6. If refund is ₹100 or above, please check in Refund Tracker first
+        4. Click "Calculate Refund" to see:<br>
+           - Refund amount<br>
+           - Monthly refund count<br>
+           - Approval/Denial decision based on 5 refunds per month rule
     </div>
     """, unsafe_allow_html=True)
 
