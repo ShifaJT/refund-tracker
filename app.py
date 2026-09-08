@@ -256,20 +256,22 @@ def get_customer_monthly_refund_count(cash_df, jc_df, manual_df, freebie_df, bzi
             ])
             total_count += manual_count
     
-    # Freebie refunds (count how many freebie refunds this customer has in this month)
+    # Freebie refunds - count freebie entries for this customer
     if not freebie_df.empty:
+        # Since freebie sheet doesn't have BZID, we can't filter by BZID
+        # But we can count freebie refunds that match the month/year
+        # In practice, freebie refunds are linked to customer via ticket ID
         date_col = find_column(freebie_df, ["Date", "date"])
         if date_col:
             freebie_df["Date"] = pd.to_datetime(freebie_df[date_col], errors="coerce")
-            # Count freebie refunds for this customer (if we have BZID in freebie sheet)
-            # For now, we count total freebie entries as they are typically linked to customer tickets
+            # For now, we'll count all freebie refunds in the month
+            # In practice, you might want to link freebie refunds to BZID via ticket ID
             freebie_count = len(freebie_df[
                 (freebie_df["Date"].dt.month == month) &
                 (freebie_df["Date"].dt.year == year) &
                 (freebie_df["Date"].notna())
             ])
-            # Since freebie sheet doesn't have BZID, we'll count it separately
-            # In practice, you might want to link freebie refunds to customer via ticket ID
+            # We'll add freebie count separately if needed
     
     return total_count
 
@@ -1320,19 +1322,27 @@ with tab6:
             st.write(f"**Month:** {selected_month_label}")
             st.write(f"**Total Monthly Refund Count:** {total_monthly_count}")
             
-            # Decision based on total monthly refund count
+            # Decision logic for freebie refunds:
+            # 1. Must have refund amount > 0
+            # 2. Refund amount must be < ₹100
+            # 3. Total monthly refund count must be < 5
+            
             if refund_amount == 0:
                 decision = "NO REFUND"
                 color = "#ffc107"
                 message = "No missing freebies found"
-            elif total_monthly_count < 5:
-                decision = "✅ APPROVED"
-                color = "#28a745"
-                message = f"Only {total_monthly_count} total refund(s) this month (Less than 5)"
-            else:
+            elif refund_amount >= 100:
+                decision = "❌ DENIED"
+                color = "#dc3545"
+                message = f"Refund amount ₹{refund_amount:.2f} exceeds ₹100 limit"
+            elif total_monthly_count >= 5:
                 decision = "❌ DENIED"
                 color = "#dc3545"
                 message = f"{total_monthly_count} total refund(s) this month (5 or more - Limit reached)"
+            else:
+                decision = "✅ APPROVED"
+                color = "#28a745"
+                message = f"Refund ₹{refund_amount:.2f} (< ₹100) and only {total_monthly_count} refund(s) this month"
             
             st.markdown(f"""
             <div style="background-color: {color}; padding: 20px; border-radius: 10px; color: white; text-align: center;">
@@ -1380,24 +1390,28 @@ with tab6:
                 <td>₹{refund_value if refund_value else 0}</td>
             </tr>
             <tr>
+                <td>Total Refund Amount</td>
+                <td>₹{refund_amount:.2f}</td>
+            </tr>
+            <tr>
                 <td>Monthly Refund Count (All Types)</td>
                 <td>{total_monthly_count}</td>
             </tr>
-            <tr style="background-color: {'#d4edda' if total_monthly_count < 5 and refund_amount > 0 else '#f8d7da'}; font-weight: bold;">
+            <tr style="background-color: {'#d4edda' if refund_amount > 0 and refund_amount < 100 and total_monthly_count < 5 else '#f8d7da'}; font-weight: bold;">
                 <td>Decision</td>
-                <td style="color: {'#28a745' if total_monthly_count < 5 and refund_amount > 0 else '#dc3545'};">
-                    {'✅ APPROVED' if total_monthly_count < 5 and refund_amount > 0 else '❌ DENIED' if refund_amount > 0 else 'ℹ️ NO REFUND'}
+                <td style="color: {'#28a745' if refund_amount > 0 and refund_amount < 100 and total_monthly_count < 5 else '#dc3545' if refund_amount > 0 else '#ffc107'};">
+                    {'✅ APPROVED' if refund_amount > 0 and refund_amount < 100 and total_monthly_count < 5 else '❌ DENIED' if refund_amount > 0 else 'ℹ️ NO REFUND'}
                 </td>
             </tr>
             <tr style="background-color: #d4edda; font-weight: bold;">
-                <td>Total Refund Amount</td>
+                <td>Final Refund Amount</td>
                 <td style="color: #28a745; font-size: 18px;">₹{refund_amount:.2f}</td>
             </tr>
         </table>
         """, unsafe_allow_html=True)
         
         # Process Refund Button
-        if refund_amount > 0 and total_monthly_count < 5:
+        if refund_amount > 0 and refund_amount < 100 and total_monthly_count < 5:
             st.markdown("---")
             st.markdown("### 🚀 Process Refund")
             
@@ -1409,14 +1423,15 @@ with tab6:
     st.markdown("---")
     st.markdown("""
     <div class="freebie-info">
-        <b>📌 How it works:</b><br>
-        1. Enter the customer's BZID (required for approval decision)<br>
+        <b>📌 Freebie Refund Rules:</b><br>
+        1. Refund amount must be < ₹100 to be approved<br>
+        2. Customer must have less than 5 total refunds in the month<br>
+        3. Both conditions must be met for APPROVAL<br><br>
+        <b>How it works:</b><br>
+        1. Enter the customer's BZID<br>
         2. Select the product and month<br>
         3. Enter the quantity the customer ordered<br>
-        4. Click "Calculate Refund" to see:<br>
-           - Refund amount<br>
-           - Total monthly refund count (across all refund types for this BZID)<br>
-           - Approval/Denial decision based on 5 refunds per month rule
+        4. Click "Calculate Refund" to see the decision
     </div>
     """, unsafe_allow_html=True)
 
