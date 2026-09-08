@@ -105,63 +105,48 @@ def load_sheet(sheet_id, sheet_name):
         client = get_client()
         sheet = client.open_by_key(sheet_id)
        
-        # Try to get the worksheet by name
         try:
             ws = sheet.worksheet(sheet_name)
         except gspread.exceptions.WorksheetNotFound:
-            # If worksheet not found, list all available worksheets
             available_sheets = [ws.title for ws in sheet.worksheets()]
-            st.error(f"❌ Worksheet '{sheet_name}' not found!")
-            st.info(f"📋 Available worksheets in this sheet: {', '.join(available_sheets)}")
-            # Try to use the first available worksheet
+            st.error(f"Worksheet '{sheet_name}' not found!")
+            st.info(f"Available worksheets: {', '.join(available_sheets)}")
             if available_sheets:
-                st.info(f"💡 Trying to use '{available_sheets[0]}' instead...")
+                st.info(f"Trying '{available_sheets[0]}' instead...")
                 ws = sheet.worksheet(available_sheets[0])
             else:
                 return pd.DataFrame()
        
-        # Get all values
         data = ws.get_all_values()
        
         if len(data) <= 1:
-            st.warning(f"⚠️ Worksheet '{sheet_name}' has no data (only headers or empty)")
+            st.warning(f"Worksheet '{sheet_name}' has no data")
             return pd.DataFrame()
        
-        # Find the header row (look for row with Ticket ID, Phone Number, etc.)
         header_row_idx = None
         for i, row in enumerate(data):
-            # Check if this row contains typical column headers
             row_str = ' '.join(str(cell).lower() for cell in row if cell)
             if 'ticket id' in row_str and 'phone number' in row_str and 'hub' in row_str:
                 header_row_idx = i
                 break
        
         if header_row_idx is None:
-            # If no header found, use first row as header
-            st.warning("⚠️ Could not find standard header row. Using first row as headers.")
+            st.warning("Could not find standard header row. Using first row as headers.")
             header_row_idx = 0
        
-        # Get headers from the identified header row
         headers = [str(col).strip() if col else f"Column_{i}" for i, col in enumerate(data[header_row_idx])]
        
-        # Get data rows (after header)
-        data_rows = data[header_row_idx + 1:]
-       
-        # Filter out empty rows and rows that are just numbers or text without data
         data_rows = []
         for row in data[header_row_idx + 1:]:
-            # Check if row has at least one non-empty cell
             if any(cell for cell in row):
-                # Check if the row looks like actual data (has at least 3 non-empty cells)
                 non_empty = sum(1 for cell in row if cell and str(cell).strip())
                 if non_empty >= 3:
                     data_rows.append(row)
        
         if not data_rows:
-            st.warning(f"⚠️ No data rows found in worksheet '{sheet_name}'")
+            st.warning(f"No data rows found in '{sheet_name}'")
             return pd.DataFrame()
        
-        # Ensure all rows have the same length as headers
         max_len = len(headers)
         for i, row in enumerate(data_rows):
             if len(row) < max_len:
@@ -169,13 +154,9 @@ def load_sheet(sheet_id, sheet_name):
             elif len(row) > max_len:
                 data_rows[i] = row[:max_len]
        
-        # Create DataFrame
         df = pd.DataFrame(data_rows, columns=headers)
-       
-        # Clean up column names
         df.columns = df.columns.str.strip()
        
-        # Remove any rows where Ticket ID is empty or is a non-data value
         ticket_col = None
         for col in ["Ticket ID", "Ticket id", "Ticket Id", "ticket id", "Ticket Number", "Ticket No"]:
             if col in df.columns:
@@ -183,22 +164,30 @@ def load_sheet(sheet_id, sheet_name):
                 break
        
         if ticket_col:
-            # Convert Ticket ID to string and filter out non-numeric or empty values
             df[ticket_col] = df[ticket_col].astype(str).str.strip()
-            # Keep rows with numeric ticket IDs or those that look like ticket numbers
             df = df[df[ticket_col].str.isnumeric() | df[ticket_col].str.match(r'^\d+$') | df[ticket_col].str.match(r'^[A-Za-z]\d+$')]
        
-        # Fix duplicate columns
         df = fix_duplicate_columns(df)
        
         return df
        
     except gspread.exceptions.SpreadsheetNotFound:
-        st.error(f"❌ Spreadsheet not found! Sheet ID: {sheet_id}")
-        st.info("Please check if the sheet ID is correct and the service account has access.")
+        st.error(f"Spreadsheet not found! Sheet ID: {sheet_id}")
         return pd.DataFrame()
     except Exception as e:
-        st.error(f"❌ Error loading sheet: {str(e)}")
+        st.error(f"Error loading sheet: {str(e)}")
+        return pd.DataFrame()
+
+# ================= LOAD FREEBIE DATA =================
+@st.cache_data(ttl=300)
+def load_freebie_data():
+    try:
+        freebie_sheet_id = st.secrets["freebie_sheet_id"]
+        freebie_df = load_sheet(freebie_sheet_id, "Sheet1")
+        return freebie_df
+    except:
+        st.error("'freebie_sheet_id' not found in secrets!")
+        st.info("Add 'freebie_sheet_id' to secrets.toml")
         return pd.DataFrame()
 
 # ================= GET REFUND COUNT =================
@@ -532,13 +521,11 @@ def get_hub_analysis(cash_df, jc_df, manual_df, year, current_month):
 
 # ================= BANK TRANSFER DATA =================
 def get_bank_transfer_data(bank_df, ticket_id):
-    """Search for a ticket by ID in bank transfer sheet"""
     if bank_df.empty:
         return pd.DataFrame()
    
     df = bank_df.copy()
    
-    # Find Ticket ID column (case insensitive)
     ticket_col = None
     for col in df.columns:
         if col and 'ticket' in col.lower() and ('id' in col.lower() or 'no' in col.lower()):
@@ -546,11 +533,9 @@ def get_bank_transfer_data(bank_df, ticket_id):
             break
    
     if ticket_col is None:
-        st.warning("⚠️ Could not find Ticket ID column in bank transfer sheet")
-        st.info(f"📋 Available columns: {', '.join(df.columns)}")
+        st.warning("Could not find Ticket ID column")
         return pd.DataFrame()
    
-    # Filter by ticket ID
     df[ticket_col] = df[ticket_col].astype(str).str.strip()
     ticket_id_str = str(ticket_id).strip()
     df = df[df[ticket_col] == ticket_id_str]
@@ -558,7 +543,6 @@ def get_bank_transfer_data(bank_df, ticket_id):
     if df.empty:
         return pd.DataFrame()
    
-    # Rename columns for better display - using case-insensitive matching
     rename_map = {}
     for col in df.columns:
         col_lower = col.lower() if col else ''
@@ -583,20 +567,16 @@ def get_bank_transfer_data(bank_df, ticket_id):
    
     df = df.rename(columns=rename_map)
    
-    # Standardize city names if City column exists
     if "City" in df.columns:
         df["City"] = df["City"].astype(str).apply(standardize_city_name)
    
-    # Convert date if exists
     if "Date" in df.columns:
         df["Date"] = pd.to_datetime(df["Date"], errors="coerce", dayfirst=True)
         df["Date"] = df["Date"].dt.strftime("%d-%m-%Y")
    
-    # Select only columns we want to display
     display_cols = ["Ticket ID", "Phone Number", "Hub", "City", "Reason", "Amount", "UTR Number", "Status", "Date"]
     df_display = df[[col for col in display_cols if col in df.columns]].copy()
    
-    # Format amount
     if "Amount" in df_display.columns:
         df_display["Amount"] = pd.to_numeric(df_display["Amount"], errors="coerce")
         df_display["Amount"] = df_display["Amount"].apply(lambda x: f"₹{x:.2f}" if pd.notna(x) else "₹0.00")
@@ -604,13 +584,95 @@ def get_bank_transfer_data(bank_df, ticket_id):
    
     return df_display
 
+# ================= FREEBIE CALCULATOR FUNCTIONS =================
+def parse_freebie_offer(offer_text):
+    if pd.isna(offer_text) or offer_text == "":
+        return None, None
+    
+    offer_text = str(offer_text).lower().strip()
+    
+    if '+' in offer_text and not any(word in offer_text for word in ['buy', 'get', 'free']):
+        parts = offer_text.split('+')
+        if len(parts) == 2:
+            try:
+                ordered = int(parts[0].strip())
+                free = int(parts[1].strip())
+                return ordered, free
+            except:
+                pass
+    
+    if 'buy' in offer_text and 'get' in offer_text and 'free' in offer_text:
+        import re
+        numbers = re.findall(r'\d+', offer_text)
+        if len(numbers) >= 2:
+            try:
+                ordered = int(numbers[0])
+                free = int(numbers[1])
+                return ordered, free
+            except:
+                pass
+    
+    if '+' in offer_text:
+        parts = offer_text.split('+')
+        if len(parts) == 2:
+            try:
+                ordered = int(parts[0].strip())
+                free = int(parts[1].strip())
+                return ordered, free
+            except:
+                pass
+    
+    if 'buy' in offer_text and 'get' in offer_text:
+        import re
+        numbers = re.findall(r'\d+', offer_text)
+        if len(numbers) >= 2:
+            try:
+                ordered = int(numbers[0])
+                free = int(numbers[1])
+                return ordered, free
+            except:
+                pass
+    
+    return None, None
+
+def calculate_freebie_refund_from_sheet(row, ordered_qty):
+    freebie_offer = row.get('Mentioned Freebie', '')
+    if pd.isna(freebie_offer) or freebie_offer == '':
+        return 0, "No freebie offer found"
+    
+    refund_value = row.get('Refund value', 0)
+    if isinstance(refund_value, str):
+        refund_value = refund_value.replace('/-', '').strip()
+        try:
+            refund_value = float(refund_value)
+        except:
+            refund_value = 0
+    
+    if refund_value == 0:
+        return 0, "No refund value specified"
+    
+    ordered_required, free_given = parse_freebie_offer(freebie_offer)
+    
+    if ordered_required is None or free_given is None:
+        return 0, f"Could not parse offer: {freebie_offer}"
+    
+    expected_freebies = (ordered_qty // ordered_required) * free_given
+    missing_freebies = expected_freebies
+    
+    if missing_freebies == 0:
+        return 0, f"Customer ordered {ordered_qty} items, needs {ordered_required} for {free_given} freebie(s). No freebies due."
+    
+    refund_amount = missing_freebies * refund_value
+    
+    return refund_amount, f"Missing {missing_freebies} freebie(s) x Rs.{refund_value} = Rs.{refund_amount}"
+
 # ================= REFRESH =================
 if st.button("🔄 Refresh Data"):
     st.cache_data.clear()
     st.rerun()
 
 # ================= TAB SELECTION =================
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["🔍 Individual Search", "🏦 Bank Transfer Refund Details", "📊 High Risk Customers", "🏙️ City Analysis", "🏪 Hub Analysis"])
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["🔍 Individual Search", "🏦 Bank Transfer Refund Details", "📊 High Risk Customers", "🏙️ City Analysis", "🏪 Hub Analysis", "🎁 Freebie Calculator"])
 
 # ================= TAB 1: Individual Search =================
 with tab1:
@@ -683,48 +745,44 @@ with tab1:
                 (manual_df["Date"].dt.year == selected_year)
             ]
            
-            # COUNTS
             cash_count_current = cash_current_matches["Ticket Number"].nunique() if not cash_current_matches.empty else 0
             jc_count_current = jc_current_matches["Ticket ID"].nunique() if not jc_current_matches.empty else 0
             manual_count_current = manual_current_matches["Ticket No"].nunique() if not manual_current_matches.empty else 0
             total_count_current = cash_count_current + jc_count_current + manual_count_current
            
-            # AMOUNTS
             cash_amount_current = pd.to_numeric(cash_current_matches["Amount"], errors="coerce").sum() if not cash_current_matches.empty else 0
             jc_amount_current = pd.to_numeric(jc_current_matches["Amount"], errors="coerce").sum() if not jc_current_matches.empty else 0
             manual_amount_current = pd.to_numeric(manual_current_matches["Amount"], errors="coerce").sum() if not manual_current_matches.empty else 0
             total_amount_current = cash_amount_current + jc_amount_current + manual_amount_current
            
-            # YEARLY TREND
             all_refunds = pd.concat([cash_df[["BZID", "Date"]], jc_df[["BZID", "Date"]], manual_df[["BZID", "Date"]]], ignore_index=True)
             current_year_count = get_refund_count_for_period(all_refunds, bzid, current_year, 1, current_month)
             last_year_count = get_refund_count_for_period(all_refunds, bzid, current_year - 1, 1, current_month)
             month_names, monthly_counts = get_monthly_counts(all_refunds, bzid, current_year)
        
-        # DISPLAY
         col_left, col_right = st.columns([1, 1])
        
         with col_left:
-            st.markdown(f"## 📊 Current Month")
+            st.markdown("## 📊 Current Month")
             st.markdown(f"### {selected_month_label}")
            
             if total_count_current < 5:
-                st.markdown(f"""
+                st.markdown("""
                 <div class="decision-approve">
                     <div class="decision-icon tick-mark">✅</div>
                     <div class="decision-text">
                         <h2 style="color: #28a745; margin: 0;">APPROVED</h2>
-                        <p style="font-size: 18px; margin: 5px 0;">Total Refunds: {total_count_current} (Less than 5)</p>
+                        <p style="font-size: 18px; margin: 5px 0;">Total Refunds: """ + str(total_count_current) + """ (Less than 5)</p>
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
             else:
-                st.markdown(f"""
+                st.markdown("""
                 <div class="decision-deny">
                     <div class="decision-icon cross-mark">❌</div>
                     <div class="decision-text">
                         <h2 style="color: #dc3545; margin: 0;">DENIED</h2>
-                        <p style="font-size: 18px; margin: 5px 0;">Total Refunds: {total_count_current} (5 or more - Limit reached)</p>
+                        <p style="font-size: 18px; margin: 5px 0;">Total Refunds: """ + str(total_count_current) + """ (5 or more - Limit reached)</p>
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
@@ -755,7 +813,7 @@ with tab1:
                 st.metric("📦 Total", total_count_current, f"₹{round(total_amount_current, 2)}")
        
         with col_right:
-            st.markdown(f"## 📋 Refund Details")
+            st.markdown("## 📋 Refund Details")
             st.markdown(f"### {selected_month_label}")
            
             tabs_inner = st.tabs(["💳 Cash/UPI", "🏦 Jumbocash", "💵 Manual Cash"])
@@ -778,7 +836,6 @@ with tab1:
                 else:
                     st.info("No Manual Cash refunds for this month")
        
-        # YEARLY TREND
         st.markdown("---")
         st.markdown(f"## 📈 Yearly Refund Trend (Jan - {datetime(current_year, current_month, 1).strftime('%B')})")
        
@@ -819,7 +876,6 @@ with tab1:
             </div>
             """, unsafe_allow_html=True)
        
-        # Monthly breakdown
         st.markdown("### 📅 Monthly Breakdown")
         monthly_data = []
         for i, month in enumerate(month_names):
@@ -854,27 +910,22 @@ with tab2:
         ticket_id = ticket_id_input.strip()
        
         with st.spinner(f"Searching for Ticket ID: {ticket_id}..."):
-            # Load bank transfer data - using the correct sheet name "CD Refund Sheet"
             bank_df = load_sheet(st.secrets["bank_transfer_sheet_id"], "CD Refund Sheet")
            
             if bank_df.empty:
                 st.warning("⚠️ No data found in the bank transfer sheet. Please check if the sheet has data.")
                 st.stop()
            
-            # Search for ticket in bank transfer sheet
             bank_match = get_bank_transfer_data(bank_df, ticket_id)
        
-        # Display results
         if bank_match.empty:
             st.warning(f"No bank transfer records found for Ticket ID: {ticket_id}")
         else:
             st.success(f"✅ Found {len(bank_match)} bank transfer record(s) for Ticket ID: {ticket_id}")
            
-            # Display Bank Transfer details as a nice card
             st.markdown("---")
             st.markdown("## 📋 Bank Transfer Details")
            
-            # Show as a nice card
             for _, row in bank_match.iterrows():
                 status_color = "#28a745" if str(row.get('Status', '')).lower() == "success" else "#dc3545"
                 st.markdown(f"""
@@ -894,17 +945,14 @@ with tab2:
                 </div>
                 """, unsafe_allow_html=True)
            
-            # Also show as dataframe
             st.markdown("### 📊 Data View")
             st.dataframe(bank_match, use_container_width=True, hide_index=True)
            
-            # Summary
             st.markdown("---")
             st.markdown("## 📊 Summary")
            
             total_amount = 0
             if "Amount (₹)" in bank_match.columns:
-                # Extract numeric values from strings like "₹1234.56"
                 total_amount = bank_match["Amount (₹)"].str.replace("₹", "").str.replace(",", "").astype(float).sum()
            
             col1, col2 = st.columns(2)
@@ -913,7 +961,6 @@ with tab2:
             with col2:
                 st.metric("Total Amount", f"₹{total_amount:,.2f}")
            
-            # Download button
             csv = bank_match.to_csv(index=False)
             st.download_button(
                 "📥 Download Bank Transfer Details",
@@ -1110,6 +1157,185 @@ with tab5:
        
     elif st.session_state.hub_data is not None:
         st.info("✅ No hub data found!")
+
+# ================= TAB 6: Freebie Calculator =================
+with tab6:
+    st.markdown("## 🎁 Freebie Refund Calculator")
+    st.markdown("*Select a product and freebie offer, enter ordered quantity, and calculate missing freebies refund*")
+    
+    freebie_df = load_freebie_data()
+    
+    if freebie_df.empty:
+        st.error("❌ Could not load freebie data. Please check your configuration.")
+        st.stop()
+    
+    freebie_df = freebie_df.dropna(subset=['Item', 'Mentioned Freebie', 'Refund value'])
+    
+    st.markdown("### 📋 Available Freebie Offers")
+    st.dataframe(
+        freebie_df[['Item', 'Mentioned Freebie', 'Refund value']],
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Item": st.column_config.TextColumn("Product Item"),
+            "Mentioned Freebie": st.column_config.TextColumn("Freebie Offer"),
+            "Refund value": st.column_config.TextColumn("Refund Value")
+        }
+    )
+    
+    st.markdown("---")
+    st.markdown("### 🔍 Calculate Refund")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        product_options = freebie_df['Item'].unique().tolist()
+        selected_product = st.selectbox(
+            "Select Product",
+            product_options,
+            help="Select the product from the list"
+        )
+    
+    selected_row = freebie_df[freebie_df['Item'] == selected_product].iloc[0] if selected_product else None
+    
+    with col2:
+        if selected_row is not None:
+            freebie_offer = selected_row.get('Mentioned Freebie', '')
+            refund_value = selected_row.get('Refund value', '')
+            
+            st.info(f"**Freebie Offer:** {freebie_offer}")
+            st.info(f"**Refund Value:** {refund_value}")
+            
+            ordered_required, free_given = parse_freebie_offer(freebie_offer)
+            if ordered_required and free_given:
+                st.info(f"**Offer Details:** Buy {ordered_required} get {free_given} free")
+            else:
+                st.warning("⚠️ Could not parse offer format. Please check the offer text.")
+    
+    ordered_qty = st.number_input(
+        "📦 Quantity Ordered",
+        min_value=0,
+        value=10,
+        step=1,
+        help="Total quantity of the item the customer ordered"
+    )
+    
+    if st.button("🧮 Calculate Refund", type="primary"):
+        if selected_row is None:
+            st.error("❌ Please select a product")
+        elif ordered_qty <= 0:
+            st.error("❌ Quantity Ordered must be greater than 0")
+        else:
+            refund_amount, calculation_details = calculate_freebie_refund_from_sheet(
+                selected_row, ordered_qty
+            )
+            
+            st.markdown("---")
+            st.markdown("## 📊 Refund Calculation")
+            
+            if refund_amount > 0:
+                st.markdown("### 📈 Calculation Breakdown")
+                
+                freebie_offer = selected_row.get('Mentioned Freebie', '')
+                ordered_required, free_given = parse_freebie_offer(freebie_offer)
+                expected_freebies = (ordered_qty // ordered_required) * free_given if ordered_required else 0
+                
+                st.markdown("""
+                <table class="freebie-table">
+                    <tr>
+                        <th>Description</th>
+                        <th>Value</th>
+                    </tr>
+                """, unsafe_allow_html=True)
+                
+                st.markdown(f"""
+                    <tr>
+                        <td>Product</td>
+                        <td>{selected_product}</td>
+                    </tr>
+                    <tr>
+                        <td>Freebie Offer</td>
+                        <td>{freebie_offer}</td>
+                    </tr>
+                    <tr>
+                        <td>Quantity Ordered</td>
+                        <td>{ordered_qty}</td>
+                    </tr>
+                    <tr>
+                        <td>Freebies Expected</td>
+                        <td>{expected_freebies}</td>
+                    </tr>
+                    <tr>
+                        <td>Refund Value per Freebie</td>
+                        <td>₹{refund_value if refund_value else 0}</td>
+                    </tr>
+                    <tr style="background-color: #d4edda; font-weight: bold;">
+                        <td>Total Refund Amount</td>
+                        <td style="color: #28a745; font-size: 18px;">₹{refund_amount:.2f}</td>
+                    </tr>
+                </table>
+                """, unsafe_allow_html=True)
+                
+                st.markdown("### ✅ Refund Decision")
+                
+                if refund_amount < 100:
+                    st.markdown(f"""
+                    <div class="freebie-result" style="border-left: 5px solid #28a745;">
+                        <h3 style="color: #28a745;">✅ APPROVED</h3>
+                        <p style="font-size: 18px;">Refund Amount: <b>₹{refund_amount:.2f}</b></p>
+                        <p><b>Reason:</b> Freebie refund is below ₹100 threshold</p>
+                        <p><b>Details:</b> {calculation_details}</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                else:
+                    st.markdown(f"""
+                    <div class="freebie-result" style="border-left: 5px solid #dc3545;">
+                        <h3 style="color: #dc3545;">❌ REQUIRES REVIEW</h3>
+                        <p style="font-size: 18px;">Refund Amount: <b>₹{refund_amount:.2f}</b></p>
+                        <p><b>Reason:</b> Freebie refund exceeds ₹100 threshold</p>
+                        <p><b>Details:</b> {calculation_details}</p>
+                        <p style="color: #dc3545;">⚠️ Please check in Refund Tracker before processing</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                st.markdown("---")
+                st.markdown("### 🚀 Process Refund")
+                
+                col1, col2 = st.columns([1, 2])
+                with col1:
+                    if st.button(f"💰 Process ₹{refund_amount:.2f} Directly", type="primary"):
+                        st.success(f"✅ Refund of ₹{refund_amount:.2f} initiated successfully!")
+                        st.info("📌 Please verify the refund in the Refund Tracker")
+                
+                with col2:
+                    st.markdown("""
+                    <div class="freebie-info">
+                        <b>ℹ️ Note:</b> This will process the refund directly.
+                        <br>For amounts above ₹100, please use the Refund Tracker for approval.
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+            else:
+                st.markdown(f"""
+                <div class="freebie-result" style="border-left: 5px solid #ffc107;">
+                    <h3 style="color: #ffc107;">ℹ️ NO REFUND REQUIRED</h3>
+                    <p>No missing freebies found. The customer received all freebies.</p>
+                    <p><b>Details:</b> {calculation_details}</p>
+                </div>
+                """, unsafe_allow_html=True)
+    
+    st.markdown("---")
+    st.markdown("""
+    <div class="freebie-info">
+        <b>📌 How it works:</b><br>
+        1. Select a product from the list above<br>
+        2. The system will show the freebie offer and refund value<br>
+        3. Enter the quantity the customer ordered<br>
+        4. Click "Calculate Refund" to see the refund amount<br>
+        5. If refund is below ₹100, you can process directly<br>
+        6. If refund is ₹100 or above, please check in Refund Tracker first
+    </div>
+    """, unsafe_allow_html=True)
 
 # ================= FOOTER =================
 st.markdown("---")
