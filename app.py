@@ -504,7 +504,7 @@ return 0, f"Customer ordered {ordered_qty} items, needs {ordered_required} for {
 
 refund_amount = missing_freebies * refund_value
 
-return refund_amount, f"Missing {missing_freebies} freebie(s) × ₹{refund_value} = ₹{refund_amount}"
+return refund_amount, f"Missing {missing_freebies} freebie(s) x Rs.{refund_value} = Rs.{refund_amount}"
 
 # ================= REFRESH =================
 if st.button("🔄 Refresh Data"):
@@ -607,29 +607,29 @@ with st.spinner("Fetching data..."):
 col_left, col_right = st.columns([1, 1])
 
 with col_left:
-    st.markdown(f"## 📊 Current Month")
+    st.markdown("## 📊 Current Month")
     st.markdown(f"### {selected_month_label}")
    
     if total_count_current < 5:
-        st.markdown(f"""
+        st.markdown("""
         <div class="decision-approve">
             <div class="decision-icon tick-mark">✅</div>
             <div class="decision-text">
                 <h2 style="color: #28a745; margin: 0;">APPROVED</h2>
-                <p style="font-size: 18px; margin: 5px 0;">Total Refunds: {total_count_current} (Less than 5)</p>
+                <p style="font-size: 18px; margin: 5px 0;">Total Refunds: {}</p>
             </div>
         </div>
-        """, unsafe_allow_html=True)
+        """.format(total_count_current), unsafe_allow_html=True)
     else:
-        st.markdown(f"""
+        st.markdown("""
         <div class="decision-deny">
             <div class="decision-icon cross-mark">❌</div>
             <div class="decision-text">
                 <h2 style="color: #dc3545; margin: 0;">DENIED</h2>
-                <p style="font-size: 18px; margin: 5px 0;">Total Refunds: {total_count_current} (5 or more - Limit reached)</p>
+                <p style="font-size: 18px; margin: 5px 0;">Total Refunds: {} (5 or more - Limit reached)</p>
             </div>
         </div>
-        """, unsafe_allow_html=True)
+        """.format(total_count_current), unsafe_allow_html=True)
    
     if total_count_current >= 5:
         st.markdown("""
@@ -657,7 +657,7 @@ with col_left:
         st.metric("📦 Total", total_count_current, f"₹{round(total_amount_current, 2)}")
 
 with col_right:
-    st.markdown(f"## 📋 Refund Details")
+    st.markdown("## 📋 Refund Details")
     st.markdown(f"### {selected_month_label}")
    
     tabs_inner = st.tabs(["💳 Cash/UPI", "🏦 Jumbocash", "💵 Manual Cash"])
