@@ -927,7 +927,7 @@ with tab2:
             total_amount = 0
             if "Amount (₹)" in bank_match.columns:
                 # Extract numeric values from strings like "₹1234.56"
-                total_amount = bank_match["Amount (₹)"].str.replace("₹", "").str.replace(", "").astype(float).sum()
+                total_amount = bank_match["Amount (₹)"].str.replace("₹", "").str.replace(",", "").astype(float).sum()
            
             col1, col2 = st.columns(2)
             with col1:
