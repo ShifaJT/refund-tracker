@@ -608,6 +608,26 @@ def get_bank_transfer_data(bank_df, ticket_id):
    
     return df_display
 
+# ================= PARSE REFUND VALUE =================
+def parse_refund_value(value):
+    """Parse refund value from various formats (8/-, SP, etc.)"""
+    if pd.isna(value):
+        return None, False
+    
+    value_str = str(value).strip()
+    
+    # Check if SP
+    if value_str.upper() == 'SP':
+        return None, True
+    
+    # Remove /- and other characters
+    value_str = value_str.replace('/-', '').strip()
+    
+    try:
+        return float(value_str), False
+    except:
+        return None, False
+
 # ================= FREEBIE CALCULATOR FUNCTIONS =================
 def parse_freebie_offer(offer_text):
     """Parse freebie offer to extract quantity and freebie info"""
@@ -629,7 +649,6 @@ def parse_freebie_offer(offer_text):
     
     # Pattern: "Buy 12 Get 2 Free" or "Buy 2 get 1"
     if 'buy' in offer_text and 'get' in offer_text:
-        import re
         numbers = re.findall(r'\d+', offer_text)
         if len(numbers) >= 2:
             try:
@@ -647,27 +666,19 @@ def calculate_freebie_refund_from_sheet(row, ordered_qty, manual_refund_value=No
     if pd.isna(freebie_offer) or freebie_offer == '':
         return 0, "No freebie offer found"
     
-    refund_value = row.get('Refund value', 0)
+    refund_value_raw = row.get('Refund value', '')
+    parsed_value, is_sp = parse_refund_value(refund_value_raw)
     
-    # Check if refund value is "SP" (Selling Price)
-    is_sp = False
-    if isinstance(refund_value, str):
-        refund_value_clean = refund_value.strip().upper()
-        if refund_value_clean == 'SP':
-            is_sp = True
-            if manual_refund_value is not None:
-                refund_value = manual_refund_value
-            else:
-                return 0, "SP (Selling Price) - Please enter the selling price"
+    # Check if SP
+    if is_sp:
+        if manual_refund_value is not None and manual_refund_value > 0:
+            refund_value = manual_refund_value
         else:
-            refund_value = refund_value.replace('/-', '').strip()
-            try:
-                refund_value = float(refund_value)
-            except:
-                refund_value = 0
-    
-    if refund_value == 0 and not is_sp:
-        return 0, "No refund value specified"
+            return 0, "SP (Selling Price) - Please enter the selling price"
+    else:
+        if parsed_value is None or parsed_value == 0:
+            return 0, "No refund value specified"
+        refund_value = parsed_value
     
     ordered_required, free_given = parse_freebie_offer(freebie_offer)
     
@@ -1271,13 +1282,14 @@ with tab6:
     
     if selected_row is not None:
         freebie_offer = selected_row.get('Mentioned Freebie', '')
-        refund_value = selected_row.get('Refund value', '')
+        refund_value_raw = selected_row.get('Refund value', '')
         freebie_date = selected_row.get('Date', '')
         
-        # Check if refund value is "SP"
-        is_sp = str(refund_value).strip().upper() == 'SP'
+        # Parse the refund value
+        parsed_value, is_sp = parse_refund_value(refund_value_raw)
+        display_value = "SP" if is_sp else (f"₹{parsed_value:.2f}" if parsed_value is not None else refund_value_raw)
         
-        st.info(f"**Freebie Offer:** {freebie_offer} | **Refund Value:** {refund_value} | **Date Added:** {freebie_date}")
+        st.info(f"**Freebie Offer:** {freebie_offer} | **Refund Value:** {display_value} | **Date Added:** {freebie_date}")
         
         ordered_required, free_given = parse_freebie_offer(freebie_offer)
         if ordered_required and free_given:
@@ -1290,8 +1302,7 @@ with tab6:
     # Manual selling price input (shown only if SP is selected)
     manual_price = None
     if selected_row is not None:
-        refund_value = selected_row.get('Refund value', '')
-        is_sp = str(refund_value).strip().upper() == 'SP'
+        _, is_sp = parse_refund_value(selected_row.get('Refund value', ''))
         if is_sp:
             manual_price = st.number_input(
                 "💰 Enter Selling Price (₹)",
@@ -1318,8 +1329,7 @@ with tab6:
             st.stop()
         
         # Check if SP and manual price is entered
-        refund_value = selected_row.get('Refund value', '')
-        is_sp = str(refund_value).strip().upper() == 'SP'
+        _, is_sp = parse_refund_value(selected_row.get('Refund value', ''))
         
         if is_sp and (manual_price is None or manual_price <= 0):
             st.error("❌ Please enter the selling price for this product")
@@ -1354,10 +1364,14 @@ with tab6:
             st.write(f"**Freebie Offer:** {freebie_offer}")
             st.write(f"**Quantity Ordered:** {ordered_qty}")
             st.write(f"**Freebies Expected:** {expected_freebies}")
+            
+            # Display the correct refund value
             if is_sp:
                 st.write(f"**Selling Price (Manual):** ₹{manual_price:.2f}")
             else:
-                st.write(f"**Refund Value per Freebie:** ₹{float(refund_value) if refund_value else 0}")
+                parsed_val, _ = parse_refund_value(selected_row.get('Refund value', ''))
+                st.write(f"**Refund Value per Freebie:** ₹{parsed_val:.2f}" if parsed_val else "**Refund Value:** N/A")
+            
             st.write(f"**Refund Amount:** ₹{refund_amount:.2f}")
         
         with col2:
@@ -1407,6 +1421,13 @@ with tab6:
             </tr>
         """, unsafe_allow_html=True)
         
+        # Get the refund value for display
+        if is_sp:
+            display_refund_value = manual_price
+        else:
+            parsed_val, _ = parse_refund_value(selected_row.get('Refund value', ''))
+            display_refund_value = parsed_val if parsed_val else 0
+        
         st.markdown(f"""
             <tr>
                 <td>BZID</td>
@@ -1430,7 +1451,7 @@ with tab6:
             </tr>
             <tr>
                 <td>Refund Value per Freebie</td>
-                <td>₹{manual_price if is_sp else (float(refund_value) if refund_value else 0)}</td>
+                <td>₹{display_refund_value:.2f}</td>
             </tr>
             <tr>
                 <td>Total Refund Amount</td>
