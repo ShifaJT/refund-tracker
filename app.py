@@ -636,6 +636,16 @@ def parse_freebie_offer(offer_text):
     
     offer_text = str(offer_text).lower().strip()
     
+    # ========== NEW: Handle product names as 1:1 freebies ==========
+    # If the offer text is just a product name (no offer format indicators)
+    # then treat it as 1:1 ratio - Buy 1 get 1 free
+    offer_indicators = ['+', 'buy', 'get', 'free']
+    is_offer_format = any(word in offer_text for word in offer_indicators)
+    
+    if not is_offer_format:
+        # It's a product name, treat as 1:1
+        return 1, 1
+    
     # Pattern: "22+2" or "11+1"
     if '+' in offer_text:
         parts = offer_text.split('+')
@@ -679,7 +689,8 @@ def parse_freebie_offer(offer_text):
         except:
             pass
     
-    return None, None
+    # If nothing worked, default to 1:1
+    return 1, 1
 
 def calculate_freebie_refund_from_sheet(row, ordered_qty, manual_refund_value=None):
     """Calculate freebie refund based on sheet data"""
@@ -1513,8 +1524,9 @@ with tab6:
             - `11+1` (Buy 11 get 1 free)
             - `Buy 12 Get 2 Free` (Buy 12 get 2 free)
             - `Buy 2 get 1` (Buy 2 get 1 free)
+            - Or just the product name (e.g., "Scrub pad") for 1:1 freebie ratio
             
-            Please update the 'Mentioned Freebie' column in your sheet to follow these formats.
+            For 1:1 ratio, simply put the product name in the 'Mentioned Freebie' column.
             """)
         
         # Process Refund Button
@@ -1526,7 +1538,7 @@ with tab6:
                 st.success(f"✅ Refund of ₹{refund_amount:.2f} initiated successfully for BZID: {bzid}!")
                 st.info("📌 Please verify the refund in the Refund Tracker")
     
-    # Info box at bottom - FIXED RULES
+    # Info box at bottom - UPDATED with 1:1 rule
     st.markdown("---")
     st.markdown("""
     <div class="freebie-info">
@@ -1534,14 +1546,15 @@ with tab6:
         1. Refund amount must be < ₹100 to be approved<br>
         2. Customer must have less than 5 total refunds in the month<br>
         3. Both conditions must be met for APPROVAL<br><br>
+        <b>🎁 Freebie Offer Formats:</b><br>
+        • <b>Product Name only</b> (e.g., "Scrub pad") → 1:1 ratio (Buy 1 get 1 free)<br>
+        • <b>"22+2"</b> → Buy 22 get 2 free<br>
+        • <b>"11+1"</b> → Buy 11 get 1 free<br>
+        • <b>"Buy 12 Get 2 Free"</b> → Buy 12 get 2 free<br>
+        • <b>"Buy 2 get 1"</b> → Buy 2 get 1 free<br><br>
         <b>Special Case - SP (Selling Price):</b><br>
         • When refund value is "SP", you need to enter the selling price manually<br>
         • The system will use your entered price to calculate the refund<br><br>
-        <b>Supported Offer Formats:</b><br>
-        • "22+2" - Buy 22 get 2 free<br>
-        • "11+1" - Buy 11 get 1 free<br>
-        • "Buy 12 Get 2 Free" - Buy 12 get 2 free<br>
-        • "Buy 2 get 1" - Buy 2 get 1 free<br><br>
         <b>How it works:</b><br>
         1. Enter the customer's BZID<br>
         2. Select the product and month<br>
