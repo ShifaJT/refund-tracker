@@ -658,6 +658,27 @@ def parse_freebie_offer(offer_text):
             except:
                 pass
     
+    # Pattern: "Buy 2 Get 1" (without 'free' keyword)
+    if 'buy' in offer_text and 'get' in offer_text:
+        numbers = re.findall(r'\d+', offer_text)
+        if len(numbers) >= 2:
+            try:
+                ordered = int(numbers[0])
+                free = int(numbers[1])
+                return ordered, free
+            except:
+                pass
+    
+    # Pattern: Check for "Buy X Get Y" pattern
+    buy_match = re.search(r'buy\s*(\d+)\s*get\s*(\d+)', offer_text)
+    if buy_match:
+        try:
+            ordered = int(buy_match.group(1))
+            free = int(buy_match.group(2))
+            return ordered, free
+        except:
+            pass
+    
     return None, None
 
 def calculate_freebie_refund_from_sheet(row, ordered_qty, manual_refund_value=None):
@@ -677,13 +698,13 @@ def calculate_freebie_refund_from_sheet(row, ordered_qty, manual_refund_value=No
             return 0, "SP (Selling Price) - Please enter the selling price"
     else:
         if parsed_value is None or parsed_value == 0:
-            return 0, "No refund value specified"
+            return 0, f"No refund value specified for offer: {freebie_offer}"
         refund_value = parsed_value
     
     ordered_required, free_given = parse_freebie_offer(freebie_offer)
     
     if ordered_required is None or free_given is None:
-        return 0, f"Could not parse offer: {freebie_offer}"
+        return 0, f"Could not parse offer: '{freebie_offer}'. Please check the freebie offer format."
     
     expected_freebies = (ordered_qty // ordered_required) * free_given
     missing_freebies = expected_freebies
@@ -1294,10 +1315,8 @@ with tab6:
         ordered_required, free_given = parse_freebie_offer(freebie_offer)
         if ordered_required and free_given:
             st.info(f"**Offer Details:** Buy {ordered_required} get {free_given} free")
-        
-        # If SP, show manual input for selling price
-        if is_sp:
-            st.warning("⚠️ This product has 'SP' (Selling Price). Please enter the selling price below.")
+        else:
+            st.warning(f"⚠️ Could not parse freebie offer: '{freebie_offer}'. Please check if the offer follows the format like '22+2' or 'Buy 2 get 1'.")
     
     # Manual selling price input (shown only if SP is selected)
     manual_price = None
@@ -1372,7 +1391,10 @@ with tab6:
                 parsed_val, _ = parse_refund_value(selected_row.get('Refund value', ''))
                 st.write(f"**Refund Value per Freebie:** ₹{parsed_val:.2f}" if parsed_val else "**Refund Value:** N/A")
             
-            st.write(f"**Refund Amount:** ₹{refund_amount:.2f}")
+            if refund_amount == 0:
+                st.write(f"**Refund Amount:** ₹{refund_amount:.2f} (No refund due)")
+            else:
+                st.write(f"**Refund Amount:** ₹{refund_amount:.2f}")
         
         with col2:
             st.markdown("#### Decision")
@@ -1387,7 +1409,7 @@ with tab6:
             if refund_amount == 0:
                 decision = "NO REFUND"
                 color = "#ffc107"
-                message = "No missing freebies found"
+                message = "No missing freebies found or offer could not be parsed"
             elif refund_amount >= 100:
                 decision = "❌ DENIED"
                 color = "#dc3545"
@@ -1428,6 +1450,9 @@ with tab6:
             parsed_val, _ = parse_refund_value(selected_row.get('Refund value', ''))
             display_refund_value = parsed_val if parsed_val else 0
         
+        # Show offer parsing status
+        offer_parsed = "✅ Parsed" if (ordered_required and free_given) else "❌ Could not parse"
+        
         st.markdown(f"""
             <tr>
                 <td>BZID</td>
@@ -1440,6 +1465,10 @@ with tab6:
             <tr>
                 <td>Freebie Offer</td>
                 <td>{freebie_offer}</td>
+            </tr>
+            <tr>
+                <td>Offer Parse Status</td>
+                <td>{offer_parsed}</td>
             </tr>
             <tr>
                 <td>Quantity Ordered</td>
@@ -1474,6 +1503,20 @@ with tab6:
         </table>
         """, unsafe_allow_html=True)
         
+        # Show helpful message for unparsable offers
+        if not ordered_required or not free_given:
+            st.warning("""
+            ⚠️ **Could not parse the freebie offer.**
+            
+            The freebie offer should follow one of these formats:
+            - `22+2` (Buy 22 get 2 free)
+            - `11+1` (Buy 11 get 1 free)
+            - `Buy 12 Get 2 Free` (Buy 12 get 2 free)
+            - `Buy 2 get 1` (Buy 2 get 1 free)
+            
+            Please update the 'Mentioned Freebie' column in your sheet to follow these formats.
+            """)
+        
         # Process Refund Button
         if refund_amount > 0 and refund_amount < 100 and total_monthly_count < 5:
             st.markdown("---")
@@ -1483,7 +1526,7 @@ with tab6:
                 st.success(f"✅ Refund of ₹{refund_amount:.2f} initiated successfully for BZID: {bzid}!")
                 st.info("📌 Please verify the refund in the Refund Tracker")
     
-    # Info box at bottom
+    # Info box at bottom - FIXED RULES
     st.markdown("---")
     st.markdown("""
     <div class="freebie-info">
@@ -1494,6 +1537,11 @@ with tab6:
         <b>Special Case - SP (Selling Price):</b><br>
         • When refund value is "SP", you need to enter the selling price manually<br>
         • The system will use your entered price to calculate the refund<br><br>
+        <b>Supported Offer Formats:</b><br>
+        • "22+2" - Buy 22 get 2 free<br>
+        • "11+1" - Buy 11 get 1 free<br>
+        • "Buy 12 Get 2 Free" - Buy 12 get 2 free<br>
+        • "Buy 2 get 1" - Buy 2 get 1 free<br><br>
         <b>How it works:</b><br>
         1. Enter the customer's BZID<br>
         2. Select the product and month<br>
