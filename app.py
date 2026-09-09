@@ -641,21 +641,32 @@ def parse_freebie_offer(offer_text):
     
     return None, None
 
-def calculate_freebie_refund_from_sheet(row, ordered_qty):
+def calculate_freebie_refund_from_sheet(row, ordered_qty, manual_refund_value=None):
     """Calculate freebie refund based on sheet data"""
     freebie_offer = row.get('Mentioned Freebie', '')
     if pd.isna(freebie_offer) or freebie_offer == '':
         return 0, "No freebie offer found"
     
     refund_value = row.get('Refund value', 0)
-    if isinstance(refund_value, str):
-        refund_value = refund_value.replace('/-', '').strip()
-        try:
-            refund_value = float(refund_value)
-        except:
-            refund_value = 0
     
-    if refund_value == 0:
+    # Check if refund value is "SP" (Selling Price)
+    is_sp = False
+    if isinstance(refund_value, str):
+        refund_value_clean = refund_value.strip().upper()
+        if refund_value_clean == 'SP':
+            is_sp = True
+            if manual_refund_value is not None:
+                refund_value = manual_refund_value
+            else:
+                return 0, "SP (Selling Price) - Please enter the selling price"
+        else:
+            refund_value = refund_value.replace('/-', '').strip()
+            try:
+                refund_value = float(refund_value)
+            except:
+                refund_value = 0
+    
+    if refund_value == 0 and not is_sp:
         return 0, "No refund value specified"
     
     ordered_required, free_given = parse_freebie_offer(freebie_offer)
@@ -1213,9 +1224,15 @@ with tab6:
             "Date": st.column_config.DateColumn("Date"),
             "Item": st.column_config.TextColumn("Product Item"),
             "Mentioned Freebie": st.column_config.TextColumn("Freebie Offer"),
-            "Refund value": st.column_config.TextColumn("Refund Value (₹)")
+            "Refund value": st.column_config.TextColumn("Refund Value")
         }
     )
+    
+    # Check if any row has "SP" in Refund value
+    has_sp = any(freebie_df['Refund value'].astype(str).str.upper().str.strip() == 'SP')
+    
+    if has_sp:
+        st.warning("⚠️ Some products have 'SP' (Selling Price) as refund value. You will need to enter the selling price manually for those products.")
     
     st.markdown("---")
     st.markdown("### 📋 Enter Refund Details")
@@ -1254,14 +1271,35 @@ with tab6:
     
     if selected_row is not None:
         freebie_offer = selected_row.get('Mentioned Freebie', '')
-        refund_value = selected_row.get('Refund value', 0)
+        refund_value = selected_row.get('Refund value', '')
         freebie_date = selected_row.get('Date', '')
         
-        st.info(f"**Freebie Offer:** {freebie_offer} | **Refund Value:** ₹{refund_value} | **Date Added:** {freebie_date}")
+        # Check if refund value is "SP"
+        is_sp = str(refund_value).strip().upper() == 'SP'
+        
+        st.info(f"**Freebie Offer:** {freebie_offer} | **Refund Value:** {refund_value} | **Date Added:** {freebie_date}")
         
         ordered_required, free_given = parse_freebie_offer(freebie_offer)
         if ordered_required and free_given:
             st.info(f"**Offer Details:** Buy {ordered_required} get {free_given} free")
+        
+        # If SP, show manual input for selling price
+        if is_sp:
+            st.warning("⚠️ This product has 'SP' (Selling Price). Please enter the selling price below.")
+    
+    # Manual selling price input (shown only if SP is selected)
+    manual_price = None
+    if selected_row is not None:
+        refund_value = selected_row.get('Refund value', '')
+        is_sp = str(refund_value).strip().upper() == 'SP'
+        if is_sp:
+            manual_price = st.number_input(
+                "💰 Enter Selling Price (₹)",
+                min_value=0.0,
+                value=10.0,
+                step=1.0,
+                help="Enter the selling price of the product"
+            )
     
     # Calculate button
     if st.button("🧮 Calculate Refund", type="primary"):
@@ -1279,9 +1317,17 @@ with tab6:
             st.error("❌ Quantity Ordered must be greater than 0")
             st.stop()
         
+        # Check if SP and manual price is entered
+        refund_value = selected_row.get('Refund value', '')
+        is_sp = str(refund_value).strip().upper() == 'SP'
+        
+        if is_sp and (manual_price is None or manual_price <= 0):
+            st.error("❌ Please enter the selling price for this product")
+            st.stop()
+        
         # Calculate freebie refund
         refund_amount, calculation_details = calculate_freebie_refund_from_sheet(
-            selected_row, ordered_qty
+            selected_row, ordered_qty, manual_price
         )
         
         # Get customer's total monthly refund count across all refund types
@@ -1308,7 +1354,10 @@ with tab6:
             st.write(f"**Freebie Offer:** {freebie_offer}")
             st.write(f"**Quantity Ordered:** {ordered_qty}")
             st.write(f"**Freebies Expected:** {expected_freebies}")
-            st.write(f"**Refund Value per Freebie:** ₹{refund_value if refund_value else 0}")
+            if is_sp:
+                st.write(f"**Selling Price (Manual):** ₹{manual_price:.2f}")
+            else:
+                st.write(f"**Refund Value per Freebie:** ₹{float(refund_value) if refund_value else 0}")
             st.write(f"**Refund Amount:** ₹{refund_amount:.2f}")
         
         with col2:
@@ -1381,7 +1430,7 @@ with tab6:
             </tr>
             <tr>
                 <td>Refund Value per Freebie</td>
-                <td>₹{refund_value if refund_value else 0}</td>
+                <td>₹{manual_price if is_sp else (float(refund_value) if refund_value else 0)}</td>
             </tr>
             <tr>
                 <td>Total Refund Amount</td>
@@ -1421,11 +1470,15 @@ with tab6:
         1. Refund amount must be < ₹100 to be approved<br>
         2. Customer must have less than 5 total refunds in the month<br>
         3. Both conditions must be met for APPROVAL<br><br>
+        <b>Special Case - SP (Selling Price):</b><br>
+        • When refund value is "SP", you need to enter the selling price manually<br>
+        • The system will use your entered price to calculate the refund<br><br>
         <b>How it works:</b><br>
         1. Enter the customer's BZID<br>
         2. Select the product and month<br>
         3. Enter the quantity the customer ordered<br>
-        4. Click "Calculate Refund" to see the decision
+        4. If SP is shown, enter the selling price<br>
+        5. Click "Calculate Refund" to see the decision
     </div>
     """, unsafe_allow_html=True)
 
