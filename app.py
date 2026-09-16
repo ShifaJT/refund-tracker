@@ -114,27 +114,16 @@ def find_column(df, possible_names):
 def parse_dates_robust(series):
     """
     Try multiple date formats to parse a pandas Series of dates.
-    Returns a datetime Series and a boolean indicating success.
+    Returns a datetime Series.
     """
-    # First, try default parsing
     parsed = pd.to_datetime(series, errors="coerce")
     if parsed.notna().sum() > 0:
         return parsed
     
-    # Try specific formats
     formats_to_try = [
-        "%m/%d/%Y",      # 09/03/2026 (US format)
-        "%d/%m/%Y",      # 03/09/2026 (UK format)
-        "%Y-%m-%d",      # 2026-09-03
-        "%m-%d-%Y",      # 09-03-2026
-        "%d-%m-%Y",      # 03-09-2026
-        "%m/%d/%y",      # 09/03/26
-        "%d/%m/%y",      # 03/09/26
-        "%Y/%m/%d",      # 2026/09/03
-        "%d-%b-%Y",      # 03-Sep-2026
-        "%d %b %Y",      # 03 Sep 2026
-        "%b %d, %Y",     # Sep 03, 2026
-        "%B %d, %Y",     # September 03, 2026
+        "%m/%d/%Y", "%d/%m/%Y", "%Y-%m-%d", "%m-%d-%Y", "%d-%m-%Y",
+        "%m/%d/%y", "%d/%m/%y", "%Y/%m/%d", "%d-%b-%Y", "%d %b %Y",
+        "%b %d, %Y", "%B %d, %Y",
     ]
     
     for fmt in formats_to_try:
@@ -145,7 +134,6 @@ def parse_dates_robust(series):
         except:
             continue
     
-    # Last resort: try Excel serial numbers
     try:
         numeric_series = pd.to_numeric(series, errors="coerce")
         if numeric_series.notna().sum() > 0:
@@ -243,43 +231,37 @@ def load_freebie_data():
         st.error(f"Error loading freebie data: {str(e)}")
         return pd.DataFrame()
 
-# ================= PROCESS DATAFRAME (NEW - robust) =================
+# ================= PROCESS DATAFRAME =================
 def process_refund_df(df):
     """
     Process a refund dataframe: clean BZID, parse dates with multiple fallbacks.
-    Now also considers the 'Month' column as a fallback.
     """
     if df.empty:
         return df
     
     df = df.copy()
     
-    # --- Clean BZID ---
+    # Clean BZID - remove ALL whitespace
     bzid_col = find_column(df, ["BZID", "Business ID", "BZD", "bzid"])
     if bzid_col:
-        # Remove ALL whitespace (spaces, tabs, newlines) and uppercase
         df["BZID"] = df[bzid_col].astype(str).str.replace(r'\s+', '', regex=True).str.upper()
     else:
         df["BZID"] = ""
     
-    # --- Find date column ---
+    # Find date column and parse
     date_col = find_column(df, ["Date", "date", "Timestamp", "timestamp"])
     if date_col:
-        # Try robust date parsing
         parsed_dates = parse_dates_robust(df[date_col])
         df["Date"] = parsed_dates
     else:
         df["Date"] = pd.NaT
     
-    # --- FALLBACK: If Date parsing failed, use the "Month" column ---
-    # Check if we have a Month column and Date is mostly null
+    # FALLBACK: If Date parsing failed, use the "Month" column
     month_col = find_column(df, ["Month", "month", "MONTH"])
     
     if month_col and (df["Date"].isna().all() or df["Date"].notna().sum() < len(df) * 0.5):
-        # We have a month column - use it to construct dates
-        st.info(f"⚠️ Date column could not be fully parsed. Falling back to 'Month' column...")
+        st.info("⚠️ Date column could not be fully parsed. Falling back to 'Month' column...")
         
-        # Try to get year from a year column, or from Date column, or use current year
         year_col = find_column(df, ["Year", "year", "YEAR"])
         
         def construct_date(row):
@@ -288,7 +270,6 @@ def process_refund_df(df):
                 if month_val < 1 or month_val > 12:
                     return pd.NaT
                 
-                # Try to get year
                 year_val = None
                 if year_col and pd.notna(row.get(year_col)):
                     try:
@@ -296,14 +277,12 @@ def process_refund_df(df):
                     except:
                         pass
                 
-                # Try to extract year from original date string
-                if year_val is None and pd.notna(row.get(date_col)):
+                if year_val is None and date_col and pd.notna(row.get(date_col)):
                     date_str = str(row[date_col])
                     year_match = re.search(r'20\d{2}', date_str)
                     if year_match:
                         year_val = int(year_match.group())
                 
-                # Default to current year
                 if year_val is None:
                     year_val = datetime.now().year
                 
@@ -313,8 +292,15 @@ def process_refund_df(df):
         
         df["Date"] = df.apply(construct_date, axis=1)
     
-    # If we still have no valid dates but have a Month column, at minimum populate month
     return df
+
+# ================= COUNT ROWS (each row = one refund) =================
+def count_refunds(df):
+    """
+    Count refunds by counting rows. Each row in the sheet = one refund event.
+    This means duplicate ticket IDs are counted separately (to catch abuse).
+    """
+    return len(df)
 
 # ================= GET CUSTOMER MONTHLY REFUND COUNT =================
 @st.cache_data(ttl=300)
@@ -322,7 +308,6 @@ def get_customer_monthly_refund_count(cash_df, jc_df, manual_df, bzid, month, ye
     """Get total refund count for a customer in a specific month across all refund types"""
     total_count = 0
     
-    # Cash/UPI refunds
     if not cash_df.empty and "BZID" in cash_df.columns and "Date" in cash_df.columns:
         cash_count = len(cash_df[
             (cash_df["BZID"] == bzid) &
@@ -332,7 +317,6 @@ def get_customer_monthly_refund_count(cash_df, jc_df, manual_df, bzid, month, ye
         ])
         total_count += cash_count
     
-    # Jumbocash refunds
     if not jc_df.empty and "BZID" in jc_df.columns and "Date" in jc_df.columns:
         jc_count = len(jc_df[
             (jc_df["BZID"] == bzid) &
@@ -342,7 +326,6 @@ def get_customer_monthly_refund_count(cash_df, jc_df, manual_df, bzid, month, ye
         ])
         total_count += jc_count
     
-    # Manual Cash refunds
     if not manual_df.empty and "BZID" in manual_df.columns and "Date" in manual_df.columns:
         manual_count = len(manual_df[
             (manual_df["BZID"] == bzid) &
@@ -354,7 +337,7 @@ def get_customer_monthly_refund_count(cash_df, jc_df, manual_df, bzid, month, ye
     
     return total_count
 
-# ================= GET REFUND COUNT =================
+# ================= GET REFUND COUNT FOR PERIOD =================
 @st.cache_data(ttl=300)
 def get_refund_count_for_period(df, bzid, year, start_month=1, end_month=12):
     if df.empty:
@@ -366,10 +349,6 @@ def get_refund_count_for_period(df, bzid, year, start_month=1, end_month=12):
         (df["Date"].dt.month >= start_month) &
         (df["Date"].dt.month <= end_month)
     ]
-    ticket_cols = ["Ticket Number", "Ticket ID", "Ticket No"]
-    for col in ticket_cols:
-        if col in df_filtered.columns:
-            return df_filtered[col].nunique()
     return len(df_filtered)
 
 # ================= GET MONTHLY COUNTS =================
@@ -383,22 +362,11 @@ def get_monthly_counts(df, bzid, year):
             (df["Date"].dt.year == year) &
             (df["Date"].dt.month == month)
         ]
-        if not month_data.empty:
-            ticket_cols = ["Ticket Number", "Ticket ID", "Ticket No"]
-            found = False
-            for col in ticket_cols:
-                if col in month_data.columns:
-                    monthly_counts.append(month_data[col].nunique())
-                    found = True
-                    break
-            if not found:
-                monthly_counts.append(len(month_data))
-        else:
-            monthly_counts.append(0)
+        monthly_counts.append(len(month_data))
         month_names.append(datetime(year, month, 1).strftime("%B"))
     return month_names, monthly_counts
 
-# ================= OPTIMIZED: GET HIGH RISK CUSTOMERS =================
+# ================= GET HIGH RISK CUSTOMERS =================
 @st.cache_data(ttl=300)
 def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_month):
     if current_month is None:
@@ -426,11 +394,8 @@ def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_m
         else:
             df["Amount"] = 0
        
-        ticket_col = find_column(df, ["Ticket Number", "Ticket ID", "Ticket No", "Ticket Number_1", "Ticket ID_1"])
-        if ticket_col:
-            df["Ticket"] = df[ticket_col].astype(str)
-        else:
-            df["Ticket"] = df.index.astype(str)
+        # Use row index as unique ticket identifier (each row = 1 refund)
+        df["Ticket"] = df.index.astype(str) + "_" + df["BZID"].astype(str)
        
         return df[["BZID", "Date", "Amount", "Ticket"]]
    
@@ -451,7 +416,7 @@ def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_m
     all_data["Month"] = all_data["Date"].dt.month
    
     monthly_summary = all_data.groupby(["BZID", "Month"]).agg(
-        Refund_Count=("Ticket", "nunique"),
+        Refund_Count=("Ticket", "count"),
         Total_Amount=("Amount", "sum")
     ).reset_index()
    
@@ -811,7 +776,6 @@ with tab1:
             st.warning("Enter BZID")
             st.stop()
        
-        # Clean the input BZID the SAME way as the sheet data
         bzid = bzid_input.strip().replace(" ", "").upper()
        
         with st.spinner("Fetching data..."):
@@ -819,12 +783,10 @@ with tab1:
             jc_df_raw = load_sheet(st.secrets["jumbocash_sheet_id"], "Form Responses 1")
             manual_df_raw = load_sheet(st.secrets["cash_upi_sheet_id"], "cash refund")
             
-            # Process all dataframes with robust cleaning
             cash_df = process_refund_df(cash_df_raw)
             jc_df = process_refund_df(jc_df_raw)
             manual_df = process_refund_df(manual_df_raw)
             
-            # Debug info (only shown if debugging is needed)
             with st.expander("🔧 Debug Info (click to expand)", expanded=False):
                 st.write(f"**Searching for BZID:** `{bzid}`")
                 st.write(f"**Cash/UPI rows:** {len(cash_df)} | Valid dates: {cash_df['Date'].notna().sum()}")
@@ -858,9 +820,10 @@ with tab1:
                 (manual_df["Date"].dt.year == selected_year)
             ] if not manual_df.empty and "BZID" in manual_df.columns and "Date" in manual_df.columns else pd.DataFrame()
            
-            cash_count_current = cash_current_matches["Ticket Number"].nunique() if not cash_current_matches.empty and "Ticket Number" in cash_current_matches.columns else len(cash_current_matches)
-            jc_count_current = jc_current_matches["Ticket ID"].nunique() if not jc_current_matches.empty and "Ticket ID" in jc_current_matches.columns else len(jc_current_matches)
-            manual_count_current = manual_current_matches["Ticket No"].nunique() if not manual_current_matches.empty and "Ticket No" in manual_current_matches.columns else len(manual_current_matches)
+            # COUNT ROWS - each row = one refund
+            cash_count_current = len(cash_current_matches)
+            jc_count_current = len(jc_current_matches)
+            manual_count_current = len(manual_current_matches)
             total_count_current = cash_count_current + jc_count_current + manual_count_current
            
             cash_amount_current = pd.to_numeric(cash_current_matches["Amount"], errors="coerce").sum() if not cash_current_matches.empty and "Amount" in cash_current_matches.columns else 0
@@ -868,7 +831,6 @@ with tab1:
             manual_amount_current = pd.to_numeric(manual_current_matches["Amount"], errors="coerce").sum() if not manual_current_matches.empty and "Amount" in manual_current_matches.columns else 0
             total_amount_current = cash_amount_current + jc_amount_current + manual_amount_current
            
-            # Create all_refunds for yearly trend
             all_refunds_list = []
             for df in [cash_df, jc_df, manual_df]:
                 if not df.empty and "BZID" in df.columns and "Date" in df.columns:
@@ -1019,7 +981,7 @@ with tab1:
 # ================= TAB 2: Bank Transfer Refund Details =================
 with tab2:
     st.markdown("## 🏦 Bank Transfer Refund Details")
-    st.markdown("*Search for a bank transfer refund by Ticket ID and view all details including UTR number, status, and transaction information*")
+    st.markdown("*Search for a bank transfer refund by Ticket ID and view all details*")
    
     ticket_id_input = st.text_input("Enter Ticket ID")
    
@@ -1034,7 +996,7 @@ with tab2:
             bank_df = load_sheet(st.secrets["bank_transfer_sheet_id"], "CD Refund Sheet")
            
             if bank_df.empty:
-                st.warning("⚠️ No data found in the bank transfer sheet. Please check if the sheet has data.")
+                st.warning("⚠️ No data found in the bank transfer sheet.")
                 st.stop()
            
             bank_match = get_bank_transfer_data(bank_df, ticket_id)
@@ -1329,9 +1291,10 @@ with tab6:
     col1, col2 = st.columns(2)
     
     with col1:
-        bzid_input = st.text_input(
+        bzid_input_fb = st.text_input(
             "Enter BZID",
-            help="Customer Business ID - required for approval decision"
+            help="Customer Business ID - required for approval decision",
+            key="freebie_bzid"
         )
         
         product_options = freebie_df['Item'].unique().tolist()
@@ -1386,11 +1349,11 @@ with tab6:
             )
     
     if st.button("🧮 Calculate Refund", type="primary"):
-        if not bzid_input:
+        if not bzid_input_fb:
             st.error("❌ Please enter BZID")
             st.stop()
         
-        bzid = bzid_input.strip().replace(" ", "").upper()
+        bzid = bzid_input_fb.strip().replace(" ", "").upper()
         
         if selected_row is None:
             st.error("❌ Please select a product")
