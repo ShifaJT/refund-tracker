@@ -13,43 +13,32 @@ st.info("Rule: Less than 5 refunds → APPROVE | 5 or more refunds → DENY")
 
 # ================= CITY NAME STANDARDIZATION =================
 def standardize_city_name(city):
-    """Standardize city names to handle spelling variations"""
     if pd.isna(city) or city == "" or city == "Unknown":
         return "Unknown"
-   
     city = str(city).strip()
     city_lower = city.lower()
-   
     city_mapping = {
-        'bengaluru': 'Bengaluru', 'bangalore': 'Bengaluru', 'bengaluru ': 'Bengaluru',
+        'bengaluru': 'Bengaluru', 'bangalore': 'Bengaluru',
         'bengaluur': 'Bengaluru', 'bengaluruu': 'Bengaluru', 'bengaliuru': 'Bengaluru',
         'banglore': 'Bengaluru', 'bnegaluru': 'Bengaluru', 'brngaluru': 'Bengaluru',
         'benaluru': 'Bengaluru', 'begaluru': 'Bengaluru',
-       
-        'hyderabad': 'Hyderabad', 'hyderabad ': 'Hyderabad', 'hyderabafd': 'Hyderabad',
+        'hyderabad': 'Hyderabad', 'hyderabafd': 'Hyderabad',
         'hyderabd': 'Hyderabad', 'hydrabad': 'Hyderabad', 'hyderavad': 'Hyderabad',
         'hyd': 'Hyderabad', 'hydersbad': 'Hyderabad',
-       
-        'pune': 'Pune', 'pune ': 'Pune', 'punr': 'Pune', 'pune1': 'Pune',
-       
-        'lucknow': 'Lucknow', 'lucknow ': 'Lucknow', 'lukcnow': 'Lucknow',
+        'pune': 'Pune', 'punr': 'Pune', 'pune1': 'Pune',
+        'lucknow': 'Lucknow', 'lukcnow': 'Lucknow',
         'luckmow': 'Lucknow', 'lucknw': 'Lucknow', 'luckno': 'Lucknow',
         'lucknoe': 'Lucknow', 'lucknonw': 'Lucknow', 'lucknowq': 'Lucknow',
         'luckow': 'Lucknow', 'luknow': 'Lucknow', 'luckmnow': 'Lucknow',
-       
-        'patna': 'Patna', 'patna ': 'Patna', 'patbna': 'Patna', 'pstna': 'Patna',
-        'patha': 'Patna',
-       
-        'ranchi': 'Ranchi', 'ranchi ': 'Ranchi', 'ranhi': 'Ranchi', 'ranci': 'Ranchi',
+        'patna': 'Patna', 'patbna': 'Patna', 'pstna': 'Patna', 'patha': 'Patna',
+        'ranchi': 'Ranchi', 'ranhi': 'Ranchi', 'ranci': 'Ranchi',
         'rancchi': 'Ranchi', 'ranc': 'Ranchi', 'rachi': 'Ranchi', 'ranchio': 'Ranchi',
-       
-        'jamshedpur': 'Jamshedpur', 'jamshedpur ': 'Jamshedpur', 'jhamshedpur': 'Jamshedpur',
+        'jamshedpur': 'Jamshedpur', 'jhamshedpur': 'Jamshedpur',
         'jhemshedpur': 'Jamshedpur',
-       
-        'mysore': 'Mysore', 'mysore ': 'Mysore', 'mysuru': 'Mysore',
+        'mysore': 'Mysore', 'mysuru': 'Mysore',
         'tumkur': 'Tumkur', 'hosur': 'Hosur', 'hassan': 'Hassan',
-        'chennai': 'Chennai', 'chennai ': 'Chennai',
-        'ahmedabad': 'Ahmedabad', 'ahmedabad ': 'Ahmedabad', 'ahamedabad': 'Ahmedabad',
+        'chennai': 'Chennai',
+        'ahmedabad': 'Ahmedabad', 'ahamedabad': 'Ahmedabad',
         'ahemdabad': 'Ahmedabad', 'ahmedabadh': 'Ahmedabad',
         'mandya': 'Mandya', 'sangareddy': 'Sangareddy', 'kanpur': 'Kanpur',
         'vizag': 'Vizag', 'unnao': 'Unnao', 'samastipur': 'Samastipur',
@@ -57,27 +46,19 @@ def standardize_city_name(city):
         'bhubaneswar': 'Bhubaneswar', 'bhuvaneswar': 'Bhubaneswar',
         'bhuabaneswar': 'Bhubaneswar',
     }
-   
     if city_lower in city_mapping:
         return city_mapping[city_lower]
-   
     hub_patterns = ['BLR_', 'HYD_', 'PUN_', 'LKO_', 'OD_', 'BH_', 'MYS_', '3P_']
     for pattern in hub_patterns:
         if pattern in city.upper():
             return city
-   
     if '_' in city and len(city) <= 15:
         return city
-   
     return city
 
 # ================= GOOGLE AUTH (READ-ONLY) =================
 @st.cache_resource
 def get_client():
-    """
-    Authorize with READ-ONLY scopes.
-    This makes it impossible for the app to modify any Google Sheet.
-    """
     creds = Credentials.from_service_account_info(
         st.secrets["gcp_service_account"],
         scopes=[
@@ -103,32 +84,26 @@ def fix_duplicate_columns(df):
 
 # ================= FIND COLUMN NAME =================
 def find_column(df, possible_names):
-    """Find a column by checking multiple possible names"""
     if df.empty:
         return None
+    cols_lower = {c.lower(): c for c in df.columns}
     for name in possible_names:
         if name in df.columns:
             return name
-        for col in df.columns:
-            if col.lower() == name.lower():
-                return col
+        if name.lower() in cols_lower:
+            return cols_lower[name.lower()]
     return None
 
 # ================= ROBUST DATE PARSER =================
 def parse_dates_robust(series):
-    """
-    Try multiple date formats to parse a pandas Series of dates.
-    """
     parsed = pd.to_datetime(series, errors="coerce")
     if parsed.notna().sum() > 0:
         return parsed
-    
     formats_to_try = [
         "%m/%d/%Y", "%d/%m/%Y", "%Y-%m-%d", "%m-%d-%Y", "%d-%m-%Y",
         "%m/%d/%y", "%d/%m/%y", "%Y/%m/%d", "%d-%b-%Y", "%d %b %Y",
         "%b %d, %Y", "%B %d, %Y",
     ]
-    
     for fmt in formats_to_try:
         try:
             parsed = pd.to_datetime(series, format=fmt, errors="coerce")
@@ -136,7 +111,6 @@ def parse_dates_robust(series):
                 return parsed
         except:
             continue
-    
     try:
         numeric_series = pd.to_numeric(series, errors="coerce")
         if numeric_series.notna().sum() > 0:
@@ -145,387 +119,271 @@ def parse_dates_robust(series):
                 return parsed
     except:
         pass
-    
     return pd.Series([pd.NaT] * len(series), index=series.index)
 
 # ================= LOAD SHEETS (READ-ONLY) =================
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=600, show_spinner=False)
 def load_sheet(sheet_id, sheet_name):
-    """
-    Read data from a Google Sheet. This function ONLY READS - it never writes.
-    """
     try:
         client = get_client()
         sheet = client.open_by_key(sheet_id)
-       
         try:
             ws = sheet.worksheet(sheet_name)
         except gspread.exceptions.WorksheetNotFound:
             available_sheets = [ws.title for ws in sheet.worksheets()]
-            st.error(f"Worksheet '{sheet_name}' not found!")
-            st.info(f"Available worksheets: {', '.join(available_sheets)}")
             if available_sheets:
-                st.info(f"Trying '{available_sheets[0]}' instead...")
                 ws = sheet.worksheet(available_sheets[0])
             else:
                 return pd.DataFrame()
-       
-        # READ ONLY
         data = ws.get_all_values()
-       
         if len(data) <= 1:
-            st.warning(f"Worksheet '{sheet_name}' has no data")
             return pd.DataFrame()
-       
         headers = [str(col).strip() if col else f"Column_{i}" for i, col in enumerate(data[0])]
-       
         data_rows = []
         for row in data[1:]:
-            if any(cell for cell in row):
-                non_empty = sum(1 for cell in row if cell and str(cell).strip())
-                if non_empty >= 2:
-                    data_rows.append(row)
-       
+            non_empty = sum(1 for cell in row if cell and str(cell).strip())
+            if non_empty >= 2:
+                data_rows.append(row)
         if not data_rows:
-            st.warning(f"No data rows found in '{sheet_name}'")
             return pd.DataFrame()
-       
         max_len = len(headers)
-        for i, row in enumerate(data_rows):
+        padded_rows = []
+        for row in data_rows:
             if len(row) < max_len:
-                data_rows[i] = row + [''] * (max_len - len(row))
+                padded_rows.append(row + [''] * (max_len - len(row)))
             elif len(row) > max_len:
-                data_rows[i] = row[:max_len]
-       
-        df = pd.DataFrame(data_rows, columns=headers)
+                padded_rows.append(row[:max_len])
+            else:
+                padded_rows.append(row)
+        df = pd.DataFrame(padded_rows, columns=headers)
         df.columns = df.columns.str.strip()
         df = fix_duplicate_columns(df)
-       
         return df
-       
-    except gspread.exceptions.SpreadsheetNotFound:
-        st.error(f"Spreadsheet not found! Sheet ID: {sheet_id}")
-        return pd.DataFrame()
     except Exception as e:
         st.error(f"Error loading sheet: {str(e)}")
         return pd.DataFrame()
 
 # ================= LOAD FREEBIE DATA =================
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=600, show_spinner=False)
 def load_freebie_data():
     try:
         freebie_sheet_id = st.secrets["freebie_sheet_id"]
         freebie_df = load_sheet(freebie_sheet_id, "Sheet1")
-        
         if not freebie_df.empty:
             freebie_df.columns = freebie_df.columns.str.strip()
-            
             required_cols = ['Date', 'Item', 'Mentioned Freebie', 'Refund value']
             missing_cols = [col for col in required_cols if col not in freebie_df.columns]
-            
             if missing_cols:
-                st.error(f"Missing columns: {missing_cols}")
-                st.info("Please make sure your sheet has columns: 'Date', 'Item', 'Mentioned Freebie', 'Refund value'")
                 return pd.DataFrame()
-            
             freebie_df['Date'] = parse_dates_robust(freebie_df['Date'])
-        
         return freebie_df
-    except KeyError:
-        st.error("'freebie_sheet_id' not found in secrets!")
-        return pd.DataFrame()
-    except Exception as e:
-        st.error(f"Error loading freebie data: {str(e)}")
+    except Exception:
         return pd.DataFrame()
 
 # ================= PROCESS DATAFRAME =================
 def process_refund_df(df):
-    """
-    Process a refund dataframe: clean BZID, parse dates with multiple fallbacks.
-    Purely in-memory transformation.
-    """
     if df.empty:
         return df
-    
     df = df.copy()
-    
     bzid_col = find_column(df, ["BZID", "Business ID", "BZD", "bzid"])
     if bzid_col:
         df["BZID"] = df[bzid_col].astype(str).str.replace(r'\s+', '', regex=True).str.upper()
     else:
         df["BZID"] = ""
-    
     date_col = find_column(df, ["Date", "date", "Timestamp", "timestamp"])
     if date_col:
-        parsed_dates = parse_dates_robust(df[date_col])
-        df["Date"] = parsed_dates
+        df["Date"] = parse_dates_robust(df[date_col])
     else:
         df["Date"] = pd.NaT
-    
-    # FALLBACK: If Date parsing failed, use the "Month" column
     month_col = find_column(df, ["Month", "month", "MONTH"])
-    
     if month_col and (df["Date"].isna().all() or df["Date"].notna().sum() < len(df) * 0.5):
-        st.info("⚠️ Date column could not be fully parsed. Falling back to 'Month' column...")
-        
         year_col = find_column(df, ["Year", "year", "YEAR"])
-        
         def construct_date(row):
             try:
                 month_val = int(float(str(row[month_col]).strip()))
                 if month_val < 1 or month_val > 12:
                     return pd.NaT
-                
                 year_val = None
                 if year_col and pd.notna(row.get(year_col)):
                     try:
                         year_val = int(float(str(row[year_col]).strip()))
                     except:
                         pass
-                
                 if year_val is None and date_col and pd.notna(row.get(date_col)):
                     date_str = str(row[date_col])
-                    year_match = re.search(r'20\d{2}', date_str)
-                    if year_match:
-                        year_val = int(year_match.group())
-                
+                    ym = re.search(r'20\d{2}', date_str)
+                    if ym:
+                        year_val = int(ym.group())
                 if year_val is None:
                     year_val = datetime.now().year
-                
                 return pd.Timestamp(year=year_val, month=month_val, day=1)
             except:
                 return pd.NaT
-        
         df["Date"] = df.apply(construct_date, axis=1)
-    
     return df
 
 # ================= GET CUSTOMER MONTHLY REFUND COUNT =================
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=600, show_spinner=False)
 def get_customer_monthly_refund_count(cash_df, jc_df, manual_df, bzid, month, year):
-    """Get total refund count for a customer in a specific month across all refund types"""
     total_count = 0
-    
-    if not cash_df.empty and "BZID" in cash_df.columns and "Date" in cash_df.columns:
-        cash_count = len(cash_df[
-            (cash_df["BZID"] == bzid) &
-            (cash_df["Date"].dt.month == month) &
-            (cash_df["Date"].dt.year == year) &
-            (cash_df["Date"].notna())
-        ])
-        total_count += cash_count
-    
-    if not jc_df.empty and "BZID" in jc_df.columns and "Date" in jc_df.columns:
-        jc_count = len(jc_df[
-            (jc_df["BZID"] == bzid) &
-            (jc_df["Date"].dt.month == month) &
-            (jc_df["Date"].dt.year == year) &
-            (jc_df["Date"].notna())
-        ])
-        total_count += jc_count
-    
-    if not manual_df.empty and "BZID" in manual_df.columns and "Date" in manual_df.columns:
-        manual_count = len(manual_df[
-            (manual_df["BZID"] == bzid) &
-            (manual_df["Date"].dt.month == month) &
-            (manual_df["Date"].dt.year == year) &
-            (manual_df["Date"].notna())
-        ])
-        total_count += manual_count
-    
+    for df in [cash_df, jc_df, manual_df]:
+        if not df.empty and "BZID" in df.columns and "Date" in df.columns:
+            mask = (
+                (df["BZID"] == bzid) &
+                (df["Date"].notna()) &
+                (df["Date"].dt.month == month) &
+                (df["Date"].dt.year == year)
+            )
+            total_count += int(mask.sum())
     return total_count
 
 # ================= GET REFUND COUNT FOR PERIOD =================
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=600, show_spinner=False)
 def get_refund_count_for_period(df, bzid, year, start_month=1, end_month=12):
     if df.empty:
         return 0
-    df_filtered = df[
+    mask = (
         (df["BZID"] == bzid) &
         (df["Date"].notna()) &
         (df["Date"].dt.year == year) &
         (df["Date"].dt.month >= start_month) &
         (df["Date"].dt.month <= end_month)
-    ]
-    return len(df_filtered)
+    )
+    return int(mask.sum())
 
 # ================= GET MONTHLY COUNTS =================
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=600, show_spinner=False)
 def get_monthly_counts(df, bzid, year):
-    monthly_counts = []
-    month_names = []
-    for month in range(1, 13):
-        month_data = df[
-            (df["BZID"] == bzid) &
-            (df["Date"].dt.year == year) &
-            (df["Date"].dt.month == month)
-        ]
-        monthly_counts.append(len(month_data))
-        month_names.append(datetime(year, month, 1).strftime("%B"))
-    return month_names, monthly_counts
+    if df.empty:
+        return [datetime(year, m, 1).strftime("%B") for m in range(1, 13)], [0] * 12
+    df_bzid = df[(df["BZID"] == bzid) & (df["Date"].notna()) & (df["Date"].dt.year == year)]
+    if df_bzid.empty:
+        return [datetime(year, m, 1).strftime("%B") for m in range(1, 13)], [0] * 12
+    monthly = df_bzid.groupby(df_bzid["Date"].dt.month).size().to_dict()
+    counts = [monthly.get(m, 0) for m in range(1, 13)]
+    names = [datetime(year, m, 1).strftime("%B") for m in range(1, 13)]
+    return names, counts
 
-# ================= HIGH RISK CUSTOMERS (3-TIER TIME WINDOW) =================
-@st.cache_data(ttl=300)
+# ================= HIGH RISK CUSTOMERS (OPTIMIZED, 3-TIER) =================
+@st.cache_data(ttl=600, show_spinner=False)
 def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_month):
-    """
-    3-tier risk analysis:
-      TIER 1 (3-MONTH)  → primary filter, high frequency + high amount in last 3 months
-      TIER 2 (6-MONTH)  → secondary, only if not caught in Tier 1
-      TIER 3 (YEARLY)   → final catch-all over the whole year
-    Each customer appears only ONCE, in the highest tier they qualify for.
-    """
     if current_month is None:
         return pd.DataFrame()
 
-    def prepare_df(df):
+    def prepare_df(df, source_label):
+        if df.empty or "BZID" not in df.columns or "Date" not in df.columns:
+            return pd.DataFrame(columns=["BZID", "Month", "Amount", "Source"])
+        df = df[df["Date"].notna()].copy()
         if df.empty:
-            return pd.DataFrame(columns=["BZID", "Date", "Amount", "Ticket"])
-
-        df = df.copy()
-
-        if "BZID" not in df.columns:
-            return pd.DataFrame(columns=["BZID", "Date", "Amount", "Ticket"])
-
-        if "Date" not in df.columns or df["Date"].isna().all():
-            return pd.DataFrame(columns=["BZID", "Date", "Amount", "Ticket"])
-
-        df = df[
-            (df["Date"].dt.year == year) &
-            (df["Date"].dt.month <= current_month) &
-            (df["Date"].notna())
-        ]
+            return pd.DataFrame(columns=["BZID", "Month", "Amount", "Source"])
+        df = df[(df["Date"].dt.year == year) & (df["Date"].dt.month <= current_month)]
         if df.empty:
-            return pd.DataFrame(columns=["BZID", "Date", "Amount", "Ticket"])
-
+            return pd.DataFrame(columns=["BZID", "Month", "Amount", "Source"])
         amount_col = find_column(df, ["Amount", "amount", "Refund Amount"])
-        if amount_col:
-            df["Amount"] = pd.to_numeric(df[amount_col], errors="coerce").fillna(0)
-        else:
-            df["Amount"] = 0
+        df["Amount"] = pd.to_numeric(df[amount_col], errors="coerce").fillna(0) if amount_col else 0.0
+        df["Month"] = df["Date"].dt.month
+        df["Source"] = source_label
+        return df[["BZID", "Month", "Amount", "Source"]]
 
-        df["Ticket"] = df.index.astype(str) + "_" + df["BZID"].astype(str)
+    cash_prep = prepare_df(cash_df, "cash")
+    jc_prep = prepare_df(jc_df, "jc")
+    manual_prep = prepare_df(manual_df, "manual")
 
-        return df[["BZID", "Date", "Amount", "Ticket"]]
+    parts = [p for p in [cash_prep, jc_prep, manual_prep] if not p.empty]
+    if not parts:
+        return pd.DataFrame()
 
-    cash_prep = prepare_df(cash_df)
-    jc_prep = prepare_df(jc_df)
-    manual_prep = prepare_df(manual_df)
-
-    all_data = pd.concat([cash_prep, jc_prep, manual_prep], ignore_index=True)
+    all_data = pd.concat(parts, ignore_index=True)
     if all_data.empty:
         return pd.DataFrame()
 
-    if not pd.api.types.is_datetime64_any_dtype(all_data["Date"]):
-        all_data["Date"] = pd.to_datetime(all_data["Date"], errors="coerce")
-    all_data = all_data[all_data["Date"].notna()]
-    if all_data.empty:
-        return pd.DataFrame()
+    source_totals = all_data.groupby(["BZID", "Source"])["Amount"].sum().unstack(fill_value=0)
+    for src_col in ["cash", "jc", "manual"]:
+        if src_col not in source_totals.columns:
+            source_totals[src_col] = 0.0
 
-    all_data["Month"] = all_data["Date"].dt.month
+    monthly_summary = all_data.groupby(["BZID", "Month"]).agg(
+        Refund_Count=("Amount", "size"),
+        Total_Amount=("Amount", "sum")
+    ).reset_index()
 
-    m3_start = max(1, current_month - 2)
-    m3_end = current_month
+    counts_pivot = monthly_summary.pivot(index="BZID", columns="Month", values="Refund_Count").fillna(0)
+    amounts_pivot = monthly_summary.pivot(index="BZID", columns="Month", values="Total_Amount").fillna(0)
 
-    m6_start = max(1, current_month - 5)
-    m6_end = current_month
+    for m in range(1, current_month + 1):
+        if m not in counts_pivot.columns:
+            counts_pivot[m] = 0
+        if m not in amounts_pivot.columns:
+            amounts_pivot[m] = 0.0
 
-    def analyze_window(start_m, end_m):
-        window_df = all_data[
-            (all_data["Month"] >= start_m) & (all_data["Month"] <= end_m)
-        ]
-        if window_df.empty:
+    counts_pivot = counts_pivot[sorted(counts_pivot.columns)]
+    amounts_pivot = amounts_pivot[sorted(amounts_pivot.columns)]
+
+    month_abbr = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+    def stats_for_window(start_m, end_m):
+        months_in_window = list(range(start_m, end_m + 1))
+        counts_w = counts_pivot[months_in_window]
+        amounts_w = amounts_pivot[months_in_window]
+
+        total_refunds = counts_w.sum(axis=1).astype(int)
+        total_amount = amounts_w.sum(axis=1).astype(float)
+        months_active = (counts_w > 0).sum(axis=1).astype(int)
+        max_monthly_refunds = counts_w.max(axis=1).astype(int)
+        max_monthly_amount = amounts_w.max(axis=1).astype(float)
+        avg_refunds = (total_refunds / len(months_in_window)).round(2)
+
+        last_2_cols = months_in_window[-2:] if len(months_in_window) >= 2 else months_in_window
+        active_recently = (counts_w[last_2_cols] > 0).any(axis=1)
+
+        mask = total_refunds > 0
+        if not mask.any():
             return pd.DataFrame()
 
-        months_in_window = end_m - start_m + 1
+        result = pd.DataFrame({
+            "BZID": counts_w.index[mask],
+            "Total Refunds": total_refunds[mask].values,
+            "Total Amount": total_amount[mask].round(2).values,
+            "Monthly Average": avg_refunds[mask].values,
+            "Months Active": months_active[mask].values,
+            "Max Monthly Refunds": max_monthly_refunds[mask].values,
+            "Max Monthly Amount": max_monthly_amount[mask].round(2).values,
+            "Active Recently": active_recently[mask].values,
+        })
 
-        monthly_summary = window_df.groupby(["BZID", "Month"]).agg(
-            Refund_Count=("Ticket", "count"),
-            Total_Amount=("Amount", "sum")
-        ).reset_index()
+        src_join = source_totals.reindex(result["BZID"].values)
+        result["Cash_UPI"] = src_join["cash"].values.round(2)
+        result["Jumbocash"] = src_join["jc"].values.round(2)
+        result["Manual_Cash"] = src_join["manual"].values.round(2)
 
-        monthly_counts_pivot = monthly_summary.pivot(
-            index="BZID", columns="Month", values="Refund_Count"
-        ).fillna(0)
-        monthly_amounts_pivot = monthly_summary.pivot(
-            index="BZID", columns="Month", values="Total_Amount"
-        ).fillna(0)
+        counts_masked = counts_w[mask]
+        amounts_masked = amounts_w[mask]
+        for m in months_in_window:
+            abbr = month_abbr[m - 1]
+            c_vals = counts_masked[m].values
+            a_vals = amounts_masked[m].values
+            result[abbr] = [
+                f"{int(c)} [₹{a:.0f}]" if c > 0 else "0"
+                for c, a in zip(c_vals, a_vals)
+            ]
+        return result
 
-        for m in range(start_m, end_m + 1):
-            if m not in monthly_counts_pivot.columns:
-                monthly_counts_pivot[m] = 0
-            if m not in monthly_amounts_pivot.columns:
-                monthly_amounts_pivot[m] = 0
+    m3_start = max(1, current_month - 2)
+    m6_start = max(1, current_month - 5)
 
-        monthly_counts_pivot = monthly_counts_pivot[sorted(monthly_counts_pivot.columns)]
-        monthly_amounts_pivot = monthly_amounts_pivot[sorted(monthly_amounts_pivot.columns)]
-
-        month_abbr = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-
-        results = []
-        for bzid in monthly_counts_pivot.index:
-            counts = monthly_counts_pivot.loc[bzid].values.tolist()
-            amounts = monthly_amounts_pivot.loc[bzid].values.tolist()
-
-            total_refunds = int(sum(counts))
-            if total_refunds == 0:
-                continue
-
-            total_amount = float(sum(amounts))
-            avg_refunds = total_refunds / months_in_window
-            months_with_refunds = sum(1 for c in counts if c > 0)
-            max_monthly_refunds = int(max(counts)) if counts else 0
-            max_monthly_amount = float(max(amounts)) if amounts else 0
-
-            last_2 = counts[-2:] if len(counts) >= 2 else counts
-            active_recently = sum(1 for c in last_2 if c > 0) >= 1
-
-            bzid_cash = cash_prep[cash_prep["BZID"] == bzid]["Amount"].sum() if not cash_prep.empty else 0
-            bzid_jc = jc_prep[jc_prep["BZID"] == bzid]["Amount"].sum() if not jc_prep.empty else 0
-            bzid_manual = manual_prep[manual_prep["BZID"] == bzid]["Amount"].sum() if not manual_prep.empty else 0
-
-            monthly_breakdown = {}
-            for i, (c, a) in enumerate(zip(counts, amounts)):
-                m_num = start_m + i
-                abbr = month_abbr[m_num - 1]
-                if c > 0:
-                    monthly_breakdown[abbr] = f"{int(c)} [₹{a:.0f}]"
-                else:
-                    monthly_breakdown[abbr] = "0"
-
-            results.append({
-                "BZID": bzid,
-                "Total Refunds": total_refunds,
-                "Monthly Average": round(avg_refunds, 2),
-                "Months Active": months_with_refunds,
-                "Max Monthly Refunds": max_monthly_refunds,
-                "Max Monthly Amount": round(max_monthly_amount, 2),
-                "Total Amount": round(total_amount, 2),
-                "Cash_UPI": round(bzid_cash, 2),
-                "Jumbocash": round(bzid_jc, 2),
-                "Manual_Cash": round(bzid_manual, 2),
-                "Active Recently": active_recently,
-                **monthly_breakdown
-            })
-
-        return pd.DataFrame(results)
-
-    df_3m = analyze_window(m3_start, m3_end)
-    df_6m = analyze_window(m6_start, m6_end)
-    df_yr = analyze_window(1, current_month)
+    df_3m = stats_for_window(m3_start, current_month)
+    df_6m = stats_for_window(m6_start, current_month)
+    df_yr = stats_for_window(1, current_month)
 
     if df_3m.empty and df_6m.empty and df_yr.empty:
         return pd.DataFrame()
-
-    classified_bzids = set()
-    final_rows = []
 
     def risk_level_for(row, window_months):
         total_amt = row["Total Amount"]
         avg = row["Monthly Average"]
         max_m = row["Max Monthly Refunds"]
         months_active = row["Months Active"]
-
         if (total_amt > 500 and avg >= 3) or max_m >= 5 or (months_active >= window_months and avg >= 3):
             return "🔴🔴 EXTREME"
         if avg >= 3 or max_m >= 4:
@@ -534,51 +392,32 @@ def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_m
             return "🟡 POTENTIAL"
         return None
 
-    # --- TIER 1: Last 3 months ---
-    if not df_3m.empty:
-        for _, row in df_3m.iterrows():
-            lvl = risk_level_for(row, 3)
-            if lvl:
-                r = row.to_dict()
-                r["Risk Level"] = lvl
-                r["Analysis Window"] = f"📅 Last 3 Months ({m3_start}-{m3_end})"
-                r["Window Months"] = 3
-                r["Status"] = "🔴 Active" if row["Active Recently"] else "⏸️ Inactive"
-                r["Tier Priority"] = 1
-                final_rows.append(r)
-                classified_bzids.add(row["BZID"])
+    classified_bzids = set()
+    final_rows = []
 
-    # --- TIER 2: Last 6 months ---
-    if not df_6m.empty:
-        for _, row in df_6m.iterrows():
-            if row["BZID"] in classified_bzids:
+    def process_tier(df_tier, tier_num, window_label, window_months, window_start, window_end):
+        if df_tier.empty:
+            return
+        for row in df_tier.to_dict("records"):
+            bzid = row["BZID"]
+            if bzid in classified_bzids:
                 continue
-            lvl = risk_level_for(row, 6)
-            if lvl:
-                r = row.to_dict()
-                r["Risk Level"] = lvl
-                r["Analysis Window"] = f"📅 Last 6 Months ({m6_start}-{m6_end})"
-                r["Window Months"] = 6
-                r["Status"] = "🔴 Active" if row["Active Recently"] else "⏸️ Inactive"
-                r["Tier Priority"] = 2
-                final_rows.append(r)
-                classified_bzids.add(row["BZID"])
+            lvl = risk_level_for(row, window_months)
+            if not lvl:
+                continue
+            row["Risk Level"] = lvl
+            row["Analysis Window"] = window_label
+            row["Window Months"] = window_months
+            row["Window Start"] = window_start
+            row["Window End"] = window_end
+            row["Status"] = "🔴 Active" if row.get("Active Recently") else "⏸️ Inactive"
+            row["Tier Priority"] = tier_num
+            final_rows.append(row)
+            classified_bzids.add(bzid)
 
-    # --- TIER 3: Full year ---
-    if not df_yr.empty:
-        for _, row in df_yr.iterrows():
-            if row["BZID"] in classified_bzids:
-                continue
-            lvl = risk_level_for(row, current_month)
-            if lvl:
-                r = row.to_dict()
-                r["Risk Level"] = lvl
-                r["Analysis Window"] = f"📆 Full Year (1-{current_month})"
-                r["Window Months"] = current_month
-                r["Status"] = "🔴 Active" if row["Active Recently"] else "⏸️ Inactive"
-                r["Tier Priority"] = 3
-                final_rows.append(r)
-                classified_bzids.add(row["BZID"])
+    process_tier(df_3m, 1, f"📅 Last 3 Months ({m3_start}-{current_month})", 3, m3_start, current_month)
+    process_tier(df_6m, 2, f"📅 Last 6 Months ({m6_start}-{current_month})", 6, m6_start, current_month)
+    process_tier(df_yr, 3, f"📆 Full Year (1-{current_month})", current_month, 1, current_month)
 
     if not final_rows:
         return pd.DataFrame()
@@ -586,229 +425,135 @@ def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_m
     return pd.DataFrame(final_rows)
 
 # ================= CITY ANALYSIS =================
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=600, show_spinner=False)
 def get_city_analysis(cash_df, jc_df, manual_df, year, current_month):
-    def prepare_city_df(df):
-        if df.empty:
+    def prepare(df):
+        if df.empty or "Date" not in df.columns:
             return pd.DataFrame(columns=["City", "Amount"])
-       
-        df = df.copy()
-        if "Date" not in df.columns:
-            return pd.DataFrame(columns=["City", "Amount"])
-        
-        df = df[df["Date"].notna()]
+        df = df[df["Date"].notna()].copy()
         df = df[(df["Date"].dt.year == year) & (df["Date"].dt.month <= current_month)]
         if df.empty:
             return pd.DataFrame(columns=["City", "Amount"])
-       
         amount_col = find_column(df, ["Amount", "amount", "Refund Amount"])
-        if amount_col:
-            df["Amount"] = pd.to_numeric(df[amount_col], errors="coerce").fillna(0)
-        else:
-            df["Amount"] = 0
-       
+        df["Amount"] = pd.to_numeric(df[amount_col], errors="coerce").fillna(0) if amount_col else 0
         city_col = find_column(df, ["City", "city", "City Name", "CityName"])
-        if city_col:
-            df["City"] = df[city_col].astype(str).apply(standardize_city_name)
-        else:
-            df["City"] = "Unknown"
-       
+        df["City"] = df[city_col].astype(str).apply(standardize_city_name) if city_col else "Unknown"
         return df[["City", "Amount"]]
-   
-    cash_city = prepare_city_df(cash_df)
-    jc_city = prepare_city_df(jc_df)
-    manual_city = prepare_city_df(manual_df)
-   
-    all_city = pd.concat([cash_city, jc_city, manual_city], ignore_index=True)
+    all_city = pd.concat([prepare(cash_df), prepare(jc_df), prepare(manual_df)], ignore_index=True)
     if all_city.empty:
         return pd.DataFrame()
-   
-    city_summary = all_city.groupby("City").agg(
+    return all_city.groupby("City").agg(
         Total_Amount=("Amount", "sum"),
         Total_Instances=("Amount", "count")
     ).reset_index().sort_values("Total_Amount", ascending=False)
-   
-    return city_summary
 
 # ================= HUB ANALYSIS =================
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=600, show_spinner=False)
 def get_hub_analysis(cash_df, jc_df, manual_df, year, current_month):
-    def prepare_hub_df(df):
-        if df.empty:
+    def prepare(df):
+        if df.empty or "Date" not in df.columns:
             return pd.DataFrame(columns=["Hub", "Amount"])
-       
-        df = df.copy()
-        if "Date" not in df.columns:
-            return pd.DataFrame(columns=["Hub", "Amount"])
-        
-        df = df[df["Date"].notna()]
+        df = df[df["Date"].notna()].copy()
         df = df[(df["Date"].dt.year == year) & (df["Date"].dt.month <= current_month)]
         if df.empty:
             return pd.DataFrame(columns=["Hub", "Amount"])
-       
         amount_col = find_column(df, ["Amount", "amount", "Refund Amount"])
-        if amount_col:
-            df["Amount"] = pd.to_numeric(df[amount_col], errors="coerce").fillna(0)
-        else:
-            df["Amount"] = 0
-       
+        df["Amount"] = pd.to_numeric(df[amount_col], errors="coerce").fillna(0) if amount_col else 0
         hub_col = find_column(df, ["Hub", "hub", "Hub ID", "HUB ID", "Hub Name"])
-        if hub_col:
-            df["Hub"] = df[hub_col].astype(str)
-        else:
-            df["Hub"] = "Unknown"
-       
+        df["Hub"] = df[hub_col].astype(str) if hub_col else "Unknown"
         return df[["Hub", "Amount"]]
-   
-    cash_hub = prepare_hub_df(cash_df)
-    jc_hub = prepare_hub_df(jc_df)
-    manual_hub = prepare_hub_df(manual_df)
-   
-    all_hub = pd.concat([cash_hub, jc_hub, manual_hub], ignore_index=True)
+    all_hub = pd.concat([prepare(cash_df), prepare(jc_df), prepare(manual_df)], ignore_index=True)
     if all_hub.empty:
         return pd.DataFrame()
-   
-    hub_summary = all_hub.groupby("Hub").agg(
+    return all_hub.groupby("Hub").agg(
         Total_Amount=("Amount", "sum"),
         Total_Instances=("Amount", "count")
     ).reset_index().sort_values("Total_Amount", ascending=False)
-   
-    return hub_summary
 
 # ================= BANK TRANSFER DATA =================
 def get_bank_transfer_data(bank_df, ticket_id):
     if bank_df.empty:
         return pd.DataFrame()
-   
     df = bank_df.copy()
-   
     ticket_col = None
     for col in df.columns:
         if col and 'ticket' in col.lower() and ('id' in col.lower() or 'no' in col.lower()):
             ticket_col = col
             break
-   
     if ticket_col is None:
-        st.warning("Could not find Ticket ID column")
         return pd.DataFrame()
-   
     df[ticket_col] = df[ticket_col].astype(str).str.replace(r'\s+', '', regex=True)
     ticket_id_str = str(ticket_id).strip().replace(" ", "")
     df = df[df[ticket_col] == ticket_id_str]
-   
     if df.empty:
         return pd.DataFrame()
-   
     rename_map = {}
     for col in df.columns:
-        col_lower = col.lower() if col else ''
-        if 'ticket' in col_lower and 'id' in col_lower:
-            rename_map[col] = "Ticket ID"
-        elif 'phone' in col_lower:
-            rename_map[col] = "Phone Number"
-        elif col_lower in ['hub', 'hub name']:
-            rename_map[col] = "Hub"
-        elif col_lower in ['city', 'city name']:
-            rename_map[col] = "City"
-        elif 'reason' in col_lower:
-            rename_map[col] = "Reason"
-        elif 'amount' in col_lower:
-            rename_map[col] = "Amount"
-        elif 'utr' in col_lower:
-            rename_map[col] = "UTR Number"
-        elif 'status' in col_lower:
-            rename_map[col] = "Status"
-        elif col_lower in ['date', 'date1']:
-            rename_map[col] = "Date"
-   
+        cl = col.lower() if col else ''
+        if 'ticket' in cl and 'id' in cl: rename_map[col] = "Ticket ID"
+        elif 'phone' in cl: rename_map[col] = "Phone Number"
+        elif cl in ['hub', 'hub name']: rename_map[col] = "Hub"
+        elif cl in ['city', 'city name']: rename_map[col] = "City"
+        elif 'reason' in cl: rename_map[col] = "Reason"
+        elif 'amount' in cl: rename_map[col] = "Amount"
+        elif 'utr' in cl: rename_map[col] = "UTR Number"
+        elif 'status' in cl: rename_map[col] = "Status"
+        elif cl in ['date', 'date1']: rename_map[col] = "Date"
     df = df.rename(columns=rename_map)
-   
     if "City" in df.columns:
         df["City"] = df["City"].astype(str).apply(standardize_city_name)
-   
     if "Date" in df.columns:
-        df["Date"] = pd.to_datetime(df["Date"], errors="coerce", dayfirst=True)
-        df["Date"] = df["Date"].dt.strftime("%d-%m-%Y")
-   
+        df["Date"] = pd.to_datetime(df["Date"], errors="coerce", dayfirst=True).dt.strftime("%d-%m-%Y")
     display_cols = ["Ticket ID", "Phone Number", "Hub", "City", "Reason", "Amount", "UTR Number", "Status", "Date"]
     df_display = df[[col for col in display_cols if col in df.columns]].copy()
-   
     if "Amount" in df_display.columns:
         df_display["Amount"] = pd.to_numeric(df_display["Amount"], errors="coerce")
         df_display["Amount"] = df_display["Amount"].apply(lambda x: f"₹{x:.2f}" if pd.notna(x) else "₹0.00")
         df_display.rename(columns={"Amount": "Amount (₹)"}, inplace=True)
-   
     return df_display
 
-# ================= PARSE REFUND VALUE =================
+# ================= PARSE HELPERS =================
 def parse_refund_value(value):
     if pd.isna(value):
         return None, False
-    
     value_str = str(value).strip()
-    
     if value_str.upper() == 'SP':
         return None, True
-    
     value_str = value_str.replace('/-', '').strip()
-    
     try:
         return float(value_str), False
     except:
         return None, False
 
-# ================= FREEBIE CALCULATOR FUNCTIONS =================
 def parse_freebie_offer(offer_text):
     if pd.isna(offer_text) or offer_text == "":
         return None, None
-    
     offer_text = str(offer_text).lower().strip()
-    
     offer_indicators = ['+', 'buy', 'get', 'free']
-    is_offer_format = any(word in offer_text for word in offer_indicators)
-    
-    if not is_offer_format:
+    if not any(word in offer_text for word in offer_indicators):
         return 1, 1
-    
     if '+' in offer_text:
         parts = offer_text.split('+')
         if len(parts) == 2:
             try:
-                ordered = int(parts[0].strip())
-                free = int(parts[1].strip())
-                return ordered, free
+                return int(parts[0].strip()), int(parts[1].strip())
             except:
                 pass
-    
     if 'buy' in offer_text and 'get' in offer_text:
         numbers = re.findall(r'\d+', offer_text)
         if len(numbers) >= 2:
             try:
-                ordered = int(numbers[0])
-                free = int(numbers[1])
-                return ordered, free
+                return int(numbers[0]), int(numbers[1])
             except:
                 pass
-    
-    buy_match = re.search(r'buy\s*(\d+)\s*get\s*(\d+)', offer_text)
-    if buy_match:
-        try:
-            ordered = int(buy_match.group(1))
-            free = int(buy_match.group(2))
-            return ordered, free
-        except:
-            pass
-    
     return 1, 1
 
 def calculate_freebie_refund_from_sheet(row, ordered_qty, manual_refund_value=None):
     freebie_offer = row.get('Mentioned Freebie', '')
     if pd.isna(freebie_offer) or freebie_offer == '':
         return 0, "No freebie offer found"
-    
     refund_value_raw = row.get('Refund value', '')
     parsed_value, is_sp = parse_refund_value(refund_value_raw)
-    
     if is_sp:
         if manual_refund_value is not None and manual_refund_value > 0:
             refund_value = manual_refund_value
@@ -818,21 +563,14 @@ def calculate_freebie_refund_from_sheet(row, ordered_qty, manual_refund_value=No
         if parsed_value is None or parsed_value == 0:
             return 0, f"No refund value specified for offer: {freebie_offer}"
         refund_value = parsed_value
-    
     ordered_required, free_given = parse_freebie_offer(freebie_offer)
-    
     if ordered_required is None or free_given is None:
         return 0, f"Could not parse offer: '{freebie_offer}'."
-    
     expected_freebies = (ordered_qty // ordered_required) * free_given
-    missing_freebies = expected_freebies
-    
-    if missing_freebies == 0:
-        return 0, f"Customer ordered {ordered_qty} items, needs {ordered_required} for {free_given} freebie(s). No freebies due."
-    
-    refund_amount = missing_freebies * refund_value
-    
-    return refund_amount, f"Missing {missing_freebies} freebie(s) x Rs.{refund_value} = Rs.{refund_amount}"
+    if expected_freebies == 0:
+        return 0, f"No freebies due for {ordered_qty} items."
+    refund_amount = expected_freebies * refund_value
+    return refund_amount, f"Missing {expected_freebies} freebie(s) x Rs.{refund_value} = Rs.{refund_amount}"
 
 # ================= REFRESH =================
 if st.button("🔄 Refresh Data"):
@@ -840,16 +578,22 @@ if st.button("🔄 Refresh Data"):
     st.rerun()
 
 # ================= TAB SELECTION =================
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["🔍 Individual Search", "🏦 Bank Transfer Refund Details", "📊 High Risk Customers", "🏙️ City Analysis", "🏪 Hub Analysis", "🎁 Freebie Calculator"])
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    "🔍 Individual Search",
+    "🏦 Bank Transfer Refund Details",
+    "📊 High Risk Customers",
+    "🏙️ City Analysis",
+    "🏪 Hub Analysis",
+    "🎁 Freebie Calculator"
+])
+
+current_year = datetime.now().year
+current_month = datetime.now().month
 
 # ================= TAB 1: Individual Search =================
 with tab1:
     col1, col2 = st.columns(2)
     bzid_input = col1.text_input("Enter BZID")
-   
-    current_year = datetime.now().year
-    current_month = datetime.now().month
-   
     month_options = {datetime(current_year, i, 1).strftime("%B %Y"): i for i in range(1, 13)}
     selected_month_label = col2.selectbox("Select Month", list(month_options.keys()))
     month_input = month_options[selected_month_label]
@@ -859,68 +603,50 @@ with tab1:
         if not bzid_input:
             st.warning("Enter BZID")
             st.stop()
-       
         bzid = bzid_input.strip().replace(" ", "").upper()
        
         with st.spinner("Fetching data..."):
-            cash_df_raw = load_sheet(st.secrets["cash_upi_sheet_id"], "Form Responses 1")
-            jc_df_raw = load_sheet(st.secrets["jumbocash_sheet_id"], "Form Responses 1")
-            manual_df_raw = load_sheet(st.secrets["cash_upi_sheet_id"], "cash refund")
-            
-            cash_df = process_refund_df(cash_df_raw)
-            jc_df = process_refund_df(jc_df_raw)
-            manual_df = process_refund_df(manual_df_raw)
+            cash_df = process_refund_df(load_sheet(st.secrets["cash_upi_sheet_id"], "Form Responses 1"))
+            jc_df = process_refund_df(load_sheet(st.secrets["jumbocash_sheet_id"], "Form Responses 1"))
+            manual_df = process_refund_df(load_sheet(st.secrets["cash_upi_sheet_id"], "cash refund"))
             
             with st.expander("🔧 Debug Info (click to expand)", expanded=False):
                 st.write(f"**Searching for BZID:** `{bzid}`")
-                st.write(f"**Cash/UPI rows:** {len(cash_df)} | Valid dates: {cash_df['Date'].notna().sum()}")
-                st.write(f"**Jumbocash rows:** {len(jc_df)} | Valid dates: {jc_df['Date'].notna().sum()}")
-                st.write(f"**Manual Cash rows:** {len(manual_df)} | Valid dates: {manual_df['Date'].notna().sum()}")
-                
-                if not jc_df.empty:
+                st.write(f"**Cash/UPI rows:** {len(cash_df)} | Valid dates: {cash_df['Date'].notna().sum() if not cash_df.empty else 0}")
+                st.write(f"**Jumbocash rows:** {len(jc_df)} | Valid dates: {jc_df['Date'].notna().sum() if not jc_df.empty else 0}")
+                st.write(f"**Manual Cash rows:** {len(manual_df)} | Valid dates: {manual_df['Date'].notna().sum() if not manual_df.empty else 0}")
+                if not jc_df.empty and "BZID" in jc_df.columns:
                     matching = jc_df[jc_df['BZID'].str.contains(bzid, na=False, regex=False)]
                     st.write(f"**Rows matching BZID in Jumbocash:** {len(matching)}")
-                    if not matching.empty:
-                        st.write(matching[['BZID', 'Date']].head(10))
            
-            cash_current_matches = cash_df[
-                (cash_df["BZID"] == bzid) &
-                (cash_df["Date"].notna()) &
-                (cash_df["Date"].dt.month == month_input) &
-                (cash_df["Date"].dt.year == selected_year)
-            ] if not cash_df.empty and "BZID" in cash_df.columns and "Date" in cash_df.columns else pd.DataFrame()
+            cash_matches = cash_df[
+                (cash_df["BZID"] == bzid) & (cash_df["Date"].notna()) &
+                (cash_df["Date"].dt.month == month_input) & (cash_df["Date"].dt.year == selected_year)
+            ] if not cash_df.empty and "BZID" in cash_df.columns else pd.DataFrame()
+            jc_matches = jc_df[
+                (jc_df["BZID"] == bzid) & (jc_df["Date"].notna()) &
+                (jc_df["Date"].dt.month == month_input) & (jc_df["Date"].dt.year == selected_year)
+            ] if not jc_df.empty and "BZID" in jc_df.columns else pd.DataFrame()
+            manual_matches = manual_df[
+                (manual_df["BZID"] == bzid) & (manual_df["Date"].notna()) &
+                (manual_df["Date"].dt.month == month_input) & (manual_df["Date"].dt.year == selected_year)
+            ] if not manual_df.empty and "BZID" in manual_df.columns else pd.DataFrame()
            
-            jc_current_matches = jc_df[
-                (jc_df["BZID"] == bzid) &
-                (jc_df["Date"].notna()) &
-                (jc_df["Date"].dt.month == month_input) &
-                (jc_df["Date"].dt.year == selected_year)
-            ] if not jc_df.empty and "BZID" in jc_df.columns and "Date" in jc_df.columns else pd.DataFrame()
+            cash_count = len(cash_matches)
+            jc_count = len(jc_matches)
+            manual_count = len(manual_matches)
+            total_count = cash_count + jc_count + manual_count
            
-            manual_current_matches = manual_df[
-                (manual_df["BZID"] == bzid) &
-                (manual_df["Date"].notna()) &
-                (manual_df["Date"].dt.month == month_input) &
-                (manual_df["Date"].dt.year == selected_year)
-            ] if not manual_df.empty and "BZID" in manual_df.columns and "Date" in manual_df.columns else pd.DataFrame()
-           
-            cash_count_current = len(cash_current_matches)
-            jc_count_current = len(jc_current_matches)
-            manual_count_current = len(manual_current_matches)
-            total_count_current = cash_count_current + jc_count_current + manual_count_current
-           
-            cash_amount_current = pd.to_numeric(cash_current_matches["Amount"], errors="coerce").sum() if not cash_current_matches.empty and "Amount" in cash_current_matches.columns else 0
-            jc_amount_current = pd.to_numeric(jc_current_matches["Amount"], errors="coerce").sum() if not jc_current_matches.empty and "Amount" in jc_current_matches.columns else 0
-            manual_amount_current = pd.to_numeric(manual_current_matches["Amount"], errors="coerce").sum() if not manual_current_matches.empty and "Amount" in manual_current_matches.columns else 0
-            total_amount_current = cash_amount_current + jc_amount_current + manual_amount_current
+            cash_amount = pd.to_numeric(cash_matches["Amount"], errors="coerce").sum() if not cash_matches.empty and "Amount" in cash_matches.columns else 0
+            jc_amount = pd.to_numeric(jc_matches["Amount"], errors="coerce").sum() if not jc_matches.empty and "Amount" in jc_matches.columns else 0
+            manual_amount = pd.to_numeric(manual_matches["Amount"], errors="coerce").sum() if not manual_matches.empty and "Amount" in manual_matches.columns else 0
+            total_amount = cash_amount + jc_amount + manual_amount
            
             all_refunds_list = []
             for df in [cash_df, jc_df, manual_df]:
                 if not df.empty and "BZID" in df.columns and "Date" in df.columns:
                     all_refunds_list.append(df[["BZID", "Date"]])
-            
             all_refunds = pd.concat(all_refunds_list, ignore_index=True) if all_refunds_list else pd.DataFrame()
-            
             if not all_refunds.empty:
                 current_year_count = get_refund_count_for_period(all_refunds, bzid, current_year, 1, current_month)
                 last_year_count = get_refund_count_for_period(all_refunds, bzid, current_year - 1, 1, current_month)
@@ -928,31 +654,28 @@ with tab1:
             else:
                 current_year_count = 0
                 last_year_count = 0
-                month_names = []
-                monthly_counts = []
+                month_names, monthly_counts = [], []
        
         col_left, col_right = st.columns([1, 1])
-       
         with col_left:
             st.markdown("## 📊 Current Month")
             st.markdown(f"### {selected_month_label}")
-           
-            if total_count_current < 5:
+            if total_count < 5:
                 st.markdown(f"""
                 <div style="background-color: #d4edda; padding: 20px; border-radius: 10px; text-align: center;">
                     <h1 style="color: #28a745; margin: 0;">✅ APPROVED</h1>
-                    <p style="font-size: 18px; margin: 5px 0;">Total Refunds: {total_count_current} (Less than 5)</p>
+                    <p style="font-size: 18px; margin: 5px 0;">Total Refunds: {total_count} (Less than 5)</p>
                 </div>
                 """, unsafe_allow_html=True)
             else:
                 st.markdown(f"""
                 <div style="background-color: #f8d7da; padding: 20px; border-radius: 10px; text-align: center;">
                     <h1 style="color: #dc3545; margin: 0;">❌ DENIED</h1>
-                    <p style="font-size: 18px; margin: 5px 0;">Total Refunds: {total_count_current} (5 or more - Limit reached)</p>
+                    <p style="font-size: 18px; margin: 5px 0;">Total Refunds: {total_count} (5 or more - Limit reached)</p>
                 </div>
                 """, unsafe_allow_html=True)
            
-            if total_count_current >= 5:
+            if total_count >= 5:
                 st.markdown("""
                 <div style="text-align: center; padding: 10px; background-color: #f8d7da; border-radius: 10px; margin-top: 10px;">
                     <span style="font-size: 32px;">🚶</span>
@@ -971,40 +694,35 @@ with tab1:
            
             c1, c2 = st.columns(2)
             with c1:
-                st.metric("💳 Cash / UPI", cash_count_current, f"₹{round(cash_amount_current, 2)}")
-                st.metric("💵 Manual Cash", manual_count_current, f"₹{round(manual_amount_current, 2)}")
+                st.metric("💳 Cash / UPI", cash_count, f"₹{round(cash_amount, 2)}")
+                st.metric("💵 Manual Cash", manual_count, f"₹{round(manual_amount, 2)}")
             with c2:
-                st.metric("🏦 Jumbocash", jc_count_current, f"₹{round(jc_amount_current, 2)}")
-                st.metric("📦 Total", total_count_current, f"₹{round(total_amount_current, 2)}")
+                st.metric("🏦 Jumbocash", jc_count, f"₹{round(jc_amount, 2)}")
+                st.metric("📦 Total", total_count, f"₹{round(total_amount, 2)}")
        
         with col_right:
             st.markdown("## 📋 Refund Details")
             st.markdown(f"### {selected_month_label}")
-           
             tabs_inner = st.tabs(["💳 Cash/UPI", "🏦 Jumbocash", "💵 Manual Cash"])
-           
             with tabs_inner[0]:
-                if not cash_current_matches.empty:
-                    st.dataframe(cash_current_matches.reset_index(drop=True), use_container_width=True, height=300)
+                if not cash_matches.empty:
+                    st.dataframe(cash_matches.reset_index(drop=True), use_container_width=True, height=300)
                 else:
                     st.info("No Cash/UPI refunds for this month")
-           
             with tabs_inner[1]:
-                if not jc_current_matches.empty:
-                    st.dataframe(jc_current_matches.reset_index(drop=True), use_container_width=True, height=300)
+                if not jc_matches.empty:
+                    st.dataframe(jc_matches.reset_index(drop=True), use_container_width=True, height=300)
                 else:
                     st.info("No Jumbocash refunds for this month")
-           
             with tabs_inner[2]:
-                if not manual_current_matches.empty:
-                    st.dataframe(manual_current_matches.reset_index(drop=True), use_container_width=True, height=300)
+                if not manual_matches.empty:
+                    st.dataframe(manual_matches.reset_index(drop=True), use_container_width=True, height=300)
                 else:
                     st.info("No Manual Cash refunds for this month")
        
         if month_names:
             st.markdown("---")
             st.markdown(f"## 📈 Yearly Refund Trend (Jan - {datetime(current_year, current_month, 1).strftime('%B')})")
-           
             col1, col2, col3 = st.columns([1, 1, 2])
             with col1:
                 st.markdown(f"""
@@ -1015,7 +733,6 @@ with tab1:
                     <p style="margin: 0; opacity: 0.9;">Jan - {datetime(current_year, current_month, 1).strftime('%b')} Total</p>
                 </div>
                 """, unsafe_allow_html=True)
-           
             with col2:
                 st.markdown(f"""
                 <div style="background-color: #764ba2; border-radius: 10px; padding: 20px; color: white;">
@@ -1025,7 +742,6 @@ with tab1:
                     <p style="margin: 0; opacity: 0.9;">Jan - {datetime(current_year, current_month, 1).strftime('%b')} Total</p>
                 </div>
                 """, unsafe_allow_html=True)
-           
             with col3:
                 if last_year_count > 0:
                     change = ((current_year_count - last_year_count) / last_year_count) * 100
@@ -1033,10 +749,9 @@ with tab1:
                     change_text = f"{direction} {abs(change):.1f}%"
                 else:
                     change_text = "New data" if current_year_count > 0 else "No data"
-               
                 st.markdown(f"""
                 <div style="background-color: #f8f9fa; border-radius: 10px; padding: 20px; height: 100%; display: flex; flex-direction: column; justify-content: center;">
-                    <p style="margin: 0; color: #6c757d; font-size: 14px;">Year-over-Year Change<br><small style="color: #999;">(Jan - {datetime(current_year, current_month, 1).strftime('%b')})</small></p>
+                    <p style="margin: 0; color: #6c757d; font-size: 14px;">Year-over-Year Change</p>
                     <h2 style="margin: 5px 0; color: {'#28a745' if current_year_count >= last_year_count else '#dc3545'}">{change_text}</h2>
                     <p style="margin: 0; color: #6c757d; font-size: 14px;">{current_year_count} vs {last_year_count} refunds</p>
                 </div>
@@ -1049,49 +764,38 @@ with tab1:
                 if selected_year == current_year and i >= current_month:
                     status = "⏳ Future" if status != "📍 Current" else status
                 monthly_data.append({"Month": month, "Refunds": monthly_counts[i], "Status": status})
-           
             monthly_df = pd.DataFrame(monthly_data)
-           
             def highlight_current(row):
                 if row['Status'] == '📍 Current':
                     return ['background-color: #e3f2fd'] * len(row)
                 elif row['Status'] == '⏳ Future':
                     return ['background-color: #f5f5f5; color: #999'] * len(row)
                 return [''] * len(row)
-           
             st.dataframe(monthly_df.style.apply(highlight_current, axis=1), use_container_width=True, hide_index=True)
 
 # ================= TAB 2: Bank Transfer Refund Details =================
 with tab2:
     st.markdown("## 🏦 Bank Transfer Refund Details")
-    st.markdown("*Search for a bank transfer refund by Ticket ID and view all details*")
+    st.markdown("*Search for a bank transfer refund by Ticket ID and view all details including UTR number, status, and transaction information*")
    
     ticket_id_input = st.text_input("Enter Ticket ID")
-   
     if st.button("🔍 Search Bank Transfer"):
         if not ticket_id_input:
             st.warning("Please enter a Ticket ID")
             st.stop()
-       
         ticket_id = ticket_id_input.strip()
-       
         with st.spinner(f"Searching for Ticket ID: {ticket_id}..."):
             bank_df = load_sheet(st.secrets["bank_transfer_sheet_id"], "CD Refund Sheet")
-           
             if bank_df.empty:
                 st.warning("⚠️ No data found in the bank transfer sheet.")
                 st.stop()
-           
             bank_match = get_bank_transfer_data(bank_df, ticket_id)
-       
         if bank_match.empty:
             st.warning(f"No bank transfer records found for Ticket ID: {ticket_id}")
         else:
             st.success(f"✅ Found {len(bank_match)} bank transfer record(s) for Ticket ID: {ticket_id}")
-           
             st.markdown("---")
             st.markdown("## 📋 Bank Transfer Details")
-           
             for _, row in bank_match.iterrows():
                 status_color = "#28a745" if str(row.get('Status', '')).lower() == "success" else "#dc3545"
                 st.markdown(f"""
@@ -1110,23 +814,18 @@ with tab2:
                     </table>
                 </div>
                 """, unsafe_allow_html=True)
-           
             st.markdown("### 📊 Data View")
             st.dataframe(bank_match, use_container_width=True, hide_index=True)
-           
             st.markdown("---")
             st.markdown("## 📊 Summary")
-           
             total_amount = 0
             if "Amount (₹)" in bank_match.columns:
                 total_amount = bank_match["Amount (₹)"].str.replace("₹", "").str.replace(",", "").astype(float).sum()
-           
             col1, col2 = st.columns(2)
             with col1:
                 st.metric("Total Records", len(bank_match))
             with col2:
                 st.metric("Total Amount", f"₹{total_amount:,.2f}")
-           
             csv = bank_match.to_csv(index=False)
             st.download_button(
                 "📥 Download Bank Transfer Details",
@@ -1138,38 +837,31 @@ with tab2:
 # ================= TAB 3: High Risk Customers =================
 with tab3:
     st.markdown("## 🚨 High Risk Customers")
-   
     st.markdown("""
     <div style="background-color: #e7f3ff; padding: 15px; border-radius: 10px; border-left: 4px solid #2196F3;">
         <b>📖 Risk Assessment (3-Tier Time Window):</b><br>
-        <b>📅 Tier 1 — Last 3 Months</b> (highest priority): High frequency + high amount refunds<br>
-        <b>📅 Tier 2 — Last 6 Months</b>: Customers not caught in Tier 1 but showing patterns over 6 months<br>
+        <b>📅 Tier 1 — Last 3 Months</b> (highest priority): Recent high-frequency + high-amount refunds<br>
+        <b>📅 Tier 2 — Last 6 Months</b>: Not caught in Tier 1 but sustained over 6 months<br>
         <b>📆 Tier 3 — Full Year</b>: Final catch-all for the rest of the year<br><br>
-        <b>Risk Levels (applied within each tier):</b><br>
-        🔴🔴 <b>EXTREME</b>: (Amount > ₹500 AND Avg ≥ 3) OR 5+ refunds in any month OR active every month<br>
-        🔴 <b>HIGH</b>: Avg ≥ 3 OR 4+ refunds in any month<br>
+        <b>Risk Levels:</b><br>
+        🔴🔴 <b>EXTREME</b>: (Amount > ₹500 AND Avg ≥ 3) OR 5+ in any month OR active every month<br>
+        🔴 <b>HIGH</b>: Avg ≥ 3 OR 4+ in any month<br>
         🟡 <b>POTENTIAL</b>: Avg ≥ 2 OR almost every month active<br><br>
         <i>Each customer appears only ONCE — in the highest-priority tier they qualify for.</i>
     </div>
     """, unsafe_allow_html=True)
    
-    @st.cache_data(ttl=300)
-    def load_all_data():
-        cash_df = process_refund_df(load_sheet(st.secrets["cash_upi_sheet_id"], "Form Responses 1"))
-        jc_df = process_refund_df(load_sheet(st.secrets["jumbocash_sheet_id"], "Form Responses 1"))
-        manual_df = process_refund_df(load_sheet(st.secrets["cash_upi_sheet_id"], "cash refund"))
-        return cash_df, jc_df, manual_df
-   
     if 'high_risk_data' not in st.session_state:
         st.session_state.high_risk_data = None
    
     if st.button("🔄 Load High Risk Customers"):
-        cash_df, jc_df, manual_df = load_all_data()
         with st.spinner("Analyzing customer data across 3 tiers..."):
-            high_risk_df = get_high_risk_customers_optimized(
+            cash_df = process_refund_df(load_sheet(st.secrets["cash_upi_sheet_id"], "Form Responses 1"))
+            jc_df = process_refund_df(load_sheet(st.secrets["jumbocash_sheet_id"], "Form Responses 1"))
+            manual_df = process_refund_df(load_sheet(st.secrets["cash_upi_sheet_id"], "cash refund"))
+            st.session_state.high_risk_data = get_high_risk_customers_optimized(
                 cash_df, jc_df, manual_df, current_year, current_month
             )
-            st.session_state.high_risk_data = high_risk_df
    
     if st.session_state.high_risk_data is not None and not st.session_state.high_risk_data.empty:
         high_risk_df = st.session_state.high_risk_data.copy()
@@ -1188,16 +880,11 @@ with tab3:
         tier3 = high_risk_df[high_risk_df["Tier Priority"] == 3]
 
         col1, col2, col3, col4, col5 = st.columns(5)
-        with col1:
-            st.metric("📅 Last 3 Months", len(tier1))
-        with col2:
-            st.metric("📅 Last 6 Months", len(tier2))
-        with col3:
-            st.metric("📆 Full Year", len(tier3))
-        with col4:
-            st.metric("🔴🔴 Extreme", len(high_risk_df[high_risk_df["Risk Level"] == "🔴🔴 EXTREME"]))
-        with col5:
-            st.metric("Total Amount", f"₹{high_risk_df['Total Amount'].sum():,.2f}")
+        with col1: st.metric("📅 Last 3 Months", len(tier1))
+        with col2: st.metric("📅 Last 6 Months", len(tier2))
+        with col3: st.metric("📆 Full Year", len(tier3))
+        with col4: st.metric("🔴🔴 Extreme", len(high_risk_df[high_risk_df["Risk Level"] == "🔴🔴 EXTREME"]))
+        with col5: st.metric("Total Amount", f"₹{high_risk_df['Total Amount'].sum():,.2f}")
 
         st.markdown("---")
 
@@ -1210,14 +897,13 @@ with tab3:
 
         month_abbr_full = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
                            "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-        all_month_cols = [m for m in month_abbr_full if m in high_risk_df.columns]
 
-        base_cols = [
+        base_cols_prefix = [
             "BZID", "Risk Level", "Analysis Window", "Status",
             "Total Refunds", "Monthly Average", "Months Active",
             "Max Monthly Refunds", "Total Amount",
             "Cash_UPI", "Jumbocash", "Manual_Cash",
-        ] + all_month_cols
+        ]
 
         column_config = {
             "BZID": st.column_config.TextColumn("BZID"),
@@ -1233,7 +919,7 @@ with tab3:
             "Jumbocash": st.column_config.NumberColumn("Jumbocash (₹)", format="₹%.2f"),
             "Manual_Cash": st.column_config.NumberColumn("Manual Cash (₹)", format="₹%.2f"),
         }
-        for m in all_month_cols:
+        for m in month_abbr_full:
             column_config[m] = st.column_config.TextColumn(m)
 
         def highlight_risk(row):
@@ -1246,11 +932,13 @@ with tab3:
                 return ['background-color: #fff3cd;'] * len(row)
             return [''] * len(row)
 
-        def render_tier(df_subset, key_suffix):
+        def render_tier(df_subset, key_suffix, window_start, window_end):
             if df_subset.empty:
                 st.info("No customers in this tier.")
                 return
-            display_df = df_subset[[c for c in base_cols if c in df_subset.columns]].copy()
+            window_months = [month_abbr_full[m - 1] for m in range(window_start, window_end + 1)]
+            display_cols = base_cols_prefix + window_months
+            display_df = df_subset[[c for c in display_cols if c in df_subset.columns]].copy()
             st.dataframe(
                 display_df.style.apply(highlight_risk, axis=1),
                 use_container_width=True,
@@ -1260,26 +948,26 @@ with tab3:
             )
 
         with tier_tabs[0]:
-            st.markdown("### 📅 Tier 1 — Customers with high refund activity in the **last 3 months**")
-            st.caption("These are the most urgent — recent, frequent, high-value refund behavior.")
-            render_tier(tier1, "t1")
+            st.markdown(f"### 📅 Tier 1 — Customers with high refund activity in the **last 3 months**")
+            st.caption("Showing ONLY the last 3 months below. These are the most urgent cases.")
+            render_tier(tier1, "t1", max(1, current_month - 2), current_month)
 
         with tier_tabs[1]:
-            st.markdown("### 📅 Tier 2 — Customers flagged over the **last 6 months**")
-            st.caption("Not urgent enough for Tier 1, but still showing sustained refund patterns.")
-            render_tier(tier2, "t2")
+            st.markdown(f"### 📅 Tier 2 — Customers flagged over the **last 6 months**")
+            st.caption("Showing ONLY the last 6 months below.")
+            render_tier(tier2, "t2", max(1, current_month - 5), current_month)
 
         with tier_tabs[2]:
-            st.markdown("### 📆 Tier 3 — Customers flagged only over the **full year**")
-            st.caption("Long-tail risk — lower priority but worth monitoring.")
-            render_tier(tier3, "t3")
+            st.markdown(f"### 📆 Tier 3 — Customers flagged over the **full year**")
+            st.caption("Showing all months of the year below.")
+            render_tier(tier3, "t3", 1, current_month)
 
         with tier_tabs[3]:
             st.markdown("### 👥 All High Risk Customers")
-            st.caption("Sorted by tier priority (3-month → 6-month → yearly), then by risk level.")
-            render_tier(high_risk_df, "all")
+            st.caption("Full view — every customer, all months of the year.")
+            render_tier(high_risk_df, "all", 1, current_month)
 
-        export_df = high_risk_df[[c for c in base_cols if c in high_risk_df.columns]].copy()
+        export_df = high_risk_df.copy()
         csv = export_df.to_csv(index=False)
         st.download_button(
             "📥 Download High Risk Report (CSV)",
@@ -1296,47 +984,32 @@ with tab4:
     st.markdown("## 🏙️ City-wise Refund Analysis")
     st.markdown("*City-wise refund amounts and instances (standardized city names)*")
    
-    @st.cache_data(ttl=300)
-    def load_city_data():
-        cash_df = process_refund_df(load_sheet(st.secrets["cash_upi_sheet_id"], "Form Responses 1"))
-        jc_df = process_refund_df(load_sheet(st.secrets["jumbocash_sheet_id"], "Form Responses 1"))
-        manual_df = process_refund_df(load_sheet(st.secrets["cash_upi_sheet_id"], "cash refund"))
-        return cash_df, jc_df, manual_df
-   
     if 'city_data' not in st.session_state:
         st.session_state.city_data = None
    
     if st.button("🔄 Load City Analysis"):
-        cash_df, jc_df, manual_df = load_city_data()
         with st.spinner("Analyzing city data..."):
-            city_data = get_city_analysis(cash_df, jc_df, manual_df, current_year, current_month)
-            st.session_state.city_data = city_data
+            cash_df = process_refund_df(load_sheet(st.secrets["cash_upi_sheet_id"], "Form Responses 1"))
+            jc_df = process_refund_df(load_sheet(st.secrets["jumbocash_sheet_id"], "Form Responses 1"))
+            manual_df = process_refund_df(load_sheet(st.secrets["cash_upi_sheet_id"], "cash refund"))
+            st.session_state.city_data = get_city_analysis(cash_df, jc_df, manual_df, current_year, current_month)
    
     if st.session_state.city_data is not None and not st.session_state.city_data.empty:
         city_df = st.session_state.city_data
-       
         col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Total Cities", city_df["City"].nunique())
-        with col2:
-            st.metric("Total Instances", city_df["Total_Instances"].sum())
-        with col3:
-            st.metric("Total Amount", f"₹{city_df['Total_Amount'].sum():,.2f}")
-       
+        with col1: st.metric("Total Cities", city_df["City"].nunique())
+        with col2: st.metric("Total Instances", city_df["Total_Instances"].sum())
+        with col3: st.metric("Total Amount", f"₹{city_df['Total_Amount'].sum():,.2f}")
         st.dataframe(
-            city_df,
-            use_container_width=True,
-            hide_index=True,
+            city_df, use_container_width=True, hide_index=True,
             column_config={
                 "City": st.column_config.TextColumn("City"),
                 "Total_Instances": st.column_config.NumberColumn("Total Instances", format="%d"),
                 "Total_Amount": st.column_config.NumberColumn("Total Amount (₹)", format="₹%.2f")
             }
         )
-       
         st.markdown("### 🔝 Top Cities by Refund Amount")
         st.bar_chart(city_df.set_index("City")["Total_Amount"].head(15))
-       
     elif st.session_state.city_data is not None:
         st.info("✅ No city data found!")
 
@@ -1345,47 +1018,32 @@ with tab5:
     st.markdown("## 🏪 Hub-wise Refund Analysis")
     st.markdown("*Hub-wise refund amounts and instances (original hub codes preserved)*")
    
-    @st.cache_data(ttl=300)
-    def load_hub_data():
-        cash_df = process_refund_df(load_sheet(st.secrets["cash_upi_sheet_id"], "Form Responses 1"))
-        jc_df = process_refund_df(load_sheet(st.secrets["jumbocash_sheet_id"], "Form Responses 1"))
-        manual_df = process_refund_df(load_sheet(st.secrets["cash_upi_sheet_id"], "cash refund"))
-        return cash_df, jc_df, manual_df
-   
     if 'hub_data' not in st.session_state:
         st.session_state.hub_data = None
    
     if st.button("🔄 Load Hub Analysis"):
-        cash_df, jc_df, manual_df = load_hub_data()
         with st.spinner("Analyzing hub data..."):
-            hub_data = get_hub_analysis(cash_df, jc_df, manual_df, current_year, current_month)
-            st.session_state.hub_data = hub_data
+            cash_df = process_refund_df(load_sheet(st.secrets["cash_upi_sheet_id"], "Form Responses 1"))
+            jc_df = process_refund_df(load_sheet(st.secrets["jumbocash_sheet_id"], "Form Responses 1"))
+            manual_df = process_refund_df(load_sheet(st.secrets["cash_upi_sheet_id"], "cash refund"))
+            st.session_state.hub_data = get_hub_analysis(cash_df, jc_df, manual_df, current_year, current_month)
    
     if st.session_state.hub_data is not None and not st.session_state.hub_data.empty:
         hub_df = st.session_state.hub_data
-       
         col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Total Hubs", hub_df["Hub"].nunique())
-        with col2:
-            st.metric("Total Instances", hub_df["Total_Instances"].sum())
-        with col3:
-            st.metric("Total Amount", f"₹{hub_df['Total_Amount'].sum():,.2f}")
-       
+        with col1: st.metric("Total Hubs", hub_df["Hub"].nunique())
+        with col2: st.metric("Total Instances", hub_df["Total_Instances"].sum())
+        with col3: st.metric("Total Amount", f"₹{hub_df['Total_Amount'].sum():,.2f}")
         st.dataframe(
-            hub_df,
-            use_container_width=True,
-            hide_index=True,
+            hub_df, use_container_width=True, hide_index=True,
             column_config={
                 "Hub": st.column_config.TextColumn("Hub"),
                 "Total_Instances": st.column_config.NumberColumn("Total Instances", format="%d"),
                 "Total_Amount": st.column_config.NumberColumn("Total Amount (₹)", format="₹%.2f")
             }
         )
-       
         st.markdown("### 🔝 Top Hubs by Refund Amount")
         st.bar_chart(hub_df.set_index("Hub")["Total_Amount"].head(15))
-       
     elif st.session_state.hub_data is not None:
         st.info("✅ No hub data found!")
 
@@ -1439,32 +1097,16 @@ with tab6:
     col1, col2 = st.columns(2)
     
     with col1:
-        bzid_input_fb = st.text_input(
-            "Enter BZID",
-            help="Customer Business ID - required for approval decision",
-            key="freebie_bzid"
-        )
-        
+        bzid_input_fb = st.text_input("Enter BZID", help="Customer Business ID - required for approval decision", key="freebie_bzid")
         product_options = freebie_df['Item'].unique().tolist()
-        selected_product = st.selectbox(
-            "Select Product",
-            product_options,
-            help="Select the product with freebie offer"
-        )
+        selected_product = st.selectbox("Select Product", product_options, help="Select the product with freebie offer")
     
     with col2:
         month_options = {datetime(current_year, i, 1).strftime("%B %Y"): i for i in range(1, 13)}
         selected_month_label = st.selectbox("Select Month for Refund Count", list(month_options.keys()), key="freebie_month")
         selected_month = month_options[selected_month_label]
         selected_year = int(selected_month_label.split()[-1])
-        
-        ordered_qty = st.number_input(
-            "📦 Quantity Ordered",
-            min_value=0,
-            value=10,
-            step=1,
-            help="Total quantity of the item the customer ordered"
-        )
+        ordered_qty = st.number_input("📦 Quantity Ordered", min_value=0, value=10, step=1, help="Total quantity of the item the customer ordered")
     
     selected_row = freebie_df[freebie_df['Item'] == selected_product].iloc[0] if selected_product else None
     
@@ -1472,12 +1114,9 @@ with tab6:
         freebie_offer = selected_row.get('Mentioned Freebie', '')
         refund_value_raw = selected_row.get('Refund value', '')
         freebie_date = selected_row.get('Date', '')
-        
         parsed_value, is_sp = parse_refund_value(refund_value_raw)
         display_value = "SP" if is_sp else (f"₹{parsed_value:.2f}" if parsed_value is not None else refund_value_raw)
-        
         st.info(f"**Freebie Offer:** {freebie_offer} | **Refund Value:** {display_value} | **Date Added:** {freebie_date}")
-        
         ordered_required, free_given = parse_freebie_offer(freebie_offer)
         if ordered_required and free_given:
             st.info(f"**Offer Details:** Buy {ordered_required} get {free_given} free")
@@ -1488,53 +1127,35 @@ with tab6:
     if selected_row is not None:
         _, is_sp = parse_refund_value(selected_row.get('Refund value', ''))
         if is_sp:
-            manual_price = st.number_input(
-                "💰 Enter Selling Price (₹)",
-                min_value=0.0,
-                value=10.0,
-                step=1.0,
-                help="Enter the selling price of the product"
-            )
+            manual_price = st.number_input("💰 Enter Selling Price (₹)", min_value=0.0, value=10.0, step=1.0, help="Enter the selling price of the product")
     
     if st.button("🧮 Calculate Refund", type="primary"):
         if not bzid_input_fb:
             st.error("❌ Please enter BZID")
             st.stop()
-        
         bzid = bzid_input_fb.strip().replace(" ", "").upper()
-        
         if selected_row is None:
             st.error("❌ Please select a product")
             st.stop()
-        
         if ordered_qty <= 0:
             st.error("❌ Quantity Ordered must be greater than 0")
             st.stop()
-        
         _, is_sp = parse_refund_value(selected_row.get('Refund value', ''))
-        
         if is_sp and (manual_price is None or manual_price <= 0):
             st.error("❌ Please enter the selling price for this product")
             st.stop()
         
-        refund_amount, calculation_details = calculate_freebie_refund_from_sheet(
-            selected_row, ordered_qty, manual_price
-        )
-        
-        total_monthly_count = get_customer_monthly_refund_count(
-            cash_df, jc_df, manual_df, bzid, selected_month, selected_year
-        )
+        refund_amount, calculation_details = calculate_freebie_refund_from_sheet(selected_row, ordered_qty, manual_price)
+        total_monthly_count = get_customer_monthly_refund_count(cash_df, jc_df, manual_df, bzid, selected_month, selected_year)
         
         st.markdown("---")
         st.markdown("## 📊 Refund Calculation & Decision")
-        
         st.markdown("### 📈 Calculation Breakdown")
         
         ordered_required, free_given = parse_freebie_offer(freebie_offer)
         expected_freebies = (ordered_qty // ordered_required) * free_given if ordered_required else 0
         
         col1, col2 = st.columns(2)
-        
         with col1:
             st.markdown("#### Refund Details")
             st.write(f"**BZID:** {bzid}")
@@ -1542,13 +1163,11 @@ with tab6:
             st.write(f"**Freebie Offer:** {freebie_offer}")
             st.write(f"**Quantity Ordered:** {ordered_qty}")
             st.write(f"**Freebies Expected:** {expected_freebies}")
-            
             if is_sp:
                 st.write(f"**Selling Price (Manual):** ₹{manual_price:.2f}")
             else:
                 parsed_val, _ = parse_refund_value(selected_row.get('Refund value', ''))
                 st.write(f"**Refund Value per Freebie:** ₹{parsed_val:.2f}" if parsed_val else "**Refund Value:** N/A")
-            
             if refund_amount == 0:
                 st.write(f"**Refund Amount:** ₹{refund_amount:.2f} (No refund due)")
             else:
@@ -1634,6 +1253,13 @@ with tab6:
             - `Buy 2 get 1` (Buy 2 get 1 free)
             - Or just the product name for 1:1 freebie ratio
             """)
+        
+        if refund_amount > 0 and refund_amount < 100 and total_monthly_count < 5:
+            st.markdown("---")
+            st.markdown("### 🚀 Process Refund")
+            if st.button(f"💰 Process ₹{refund_amount:.2f} Directly", type="primary"):
+                st.success(f"✅ Refund of ₹{refund_amount:.2f} initiated successfully for BZID: {bzid}!")
+                st.info("📌 Please verify the refund in the Refund Tracker")
     
     st.markdown("---")
     st.markdown("""
