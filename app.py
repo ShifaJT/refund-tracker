@@ -61,7 +61,6 @@ def standardize_city_name(city):
     if city_lower in city_mapping:
         return city_mapping[city_lower]
    
-    # If it's a hub code pattern, keep as is
     hub_patterns = ['BLR_', 'HYD_', 'PUN_', 'LKO_', 'OD_', 'BH_', 'MYS_', '3P_']
     for pattern in hub_patterns:
         if pattern in city.upper():
@@ -111,6 +110,53 @@ def find_column(df, possible_names):
                 return col
     return None
 
+# ================= ROBUST DATE PARSER =================
+def parse_dates_robust(series):
+    """
+    Try multiple date formats to parse a pandas Series of dates.
+    Returns a datetime Series and a boolean indicating success.
+    """
+    # First, try default parsing
+    parsed = pd.to_datetime(series, errors="coerce")
+    if parsed.notna().sum() > 0:
+        return parsed
+    
+    # Try specific formats
+    formats_to_try = [
+        "%m/%d/%Y",      # 09/03/2026 (US format)
+        "%d/%m/%Y",      # 03/09/2026 (UK format)
+        "%Y-%m-%d",      # 2026-09-03
+        "%m-%d-%Y",      # 09-03-2026
+        "%d-%m-%Y",      # 03-09-2026
+        "%m/%d/%y",      # 09/03/26
+        "%d/%m/%y",      # 03/09/26
+        "%Y/%m/%d",      # 2026/09/03
+        "%d-%b-%Y",      # 03-Sep-2026
+        "%d %b %Y",      # 03 Sep 2026
+        "%b %d, %Y",     # Sep 03, 2026
+        "%B %d, %Y",     # September 03, 2026
+    ]
+    
+    for fmt in formats_to_try:
+        try:
+            parsed = pd.to_datetime(series, format=fmt, errors="coerce")
+            if parsed.notna().sum() > 0:
+                return parsed
+        except:
+            continue
+    
+    # Last resort: try Excel serial numbers
+    try:
+        numeric_series = pd.to_numeric(series, errors="coerce")
+        if numeric_series.notna().sum() > 0:
+            parsed = pd.to_datetime(numeric_series, unit='D', origin='1899-12-30', errors="coerce")
+            if parsed.notna().sum() > 0:
+                return parsed
+    except:
+        pass
+    
+    return pd.Series([pd.NaT] * len(series), index=series.index)
+
 # ================= LOAD SHEETS =================
 @st.cache_data(ttl=300)
 def load_sheet(sheet_id, sheet_name):
@@ -136,7 +182,6 @@ def load_sheet(sheet_id, sheet_name):
             st.warning(f"Worksheet '{sheet_name}' has no data")
             return pd.DataFrame()
        
-        # Use first row as headers
         headers = [str(col).strip() if col else f"Column_{i}" for i, col in enumerate(data[0])]
        
         data_rows = []
@@ -180,7 +225,6 @@ def load_freebie_data():
         if not freebie_df.empty:
             freebie_df.columns = freebie_df.columns.str.strip()
             
-            # Check for required columns
             required_cols = ['Date', 'Item', 'Mentioned Freebie', 'Refund value']
             missing_cols = [col for col in required_cols if col not in freebie_df.columns]
             
@@ -189,8 +233,7 @@ def load_freebie_data():
                 st.info("Please make sure your sheet has columns: 'Date', 'Item', 'Mentioned Freebie', 'Refund value'")
                 return pd.DataFrame()
             
-            # Convert Date column to datetime
-            freebie_df['Date'] = pd.to_datetime(freebie_df['Date'], errors="coerce")
+            freebie_df['Date'] = parse_dates_robust(freebie_df['Date'])
         
         return freebie_df
     except KeyError:
@@ -200,6 +243,79 @@ def load_freebie_data():
         st.error(f"Error loading freebie data: {str(e)}")
         return pd.DataFrame()
 
+# ================= PROCESS DATAFRAME (NEW - robust) =================
+def process_refund_df(df):
+    """
+    Process a refund dataframe: clean BZID, parse dates with multiple fallbacks.
+    Now also considers the 'Month' column as a fallback.
+    """
+    if df.empty:
+        return df
+    
+    df = df.copy()
+    
+    # --- Clean BZID ---
+    bzid_col = find_column(df, ["BZID", "Business ID", "BZD", "bzid"])
+    if bzid_col:
+        # Remove ALL whitespace (spaces, tabs, newlines) and uppercase
+        df["BZID"] = df[bzid_col].astype(str).str.replace(r'\s+', '', regex=True).str.upper()
+    else:
+        df["BZID"] = ""
+    
+    # --- Find date column ---
+    date_col = find_column(df, ["Date", "date", "Timestamp", "timestamp"])
+    if date_col:
+        # Try robust date parsing
+        parsed_dates = parse_dates_robust(df[date_col])
+        df["Date"] = parsed_dates
+    else:
+        df["Date"] = pd.NaT
+    
+    # --- FALLBACK: If Date parsing failed, use the "Month" column ---
+    # Check if we have a Month column and Date is mostly null
+    month_col = find_column(df, ["Month", "month", "MONTH"])
+    
+    if month_col and (df["Date"].isna().all() or df["Date"].notna().sum() < len(df) * 0.5):
+        # We have a month column - use it to construct dates
+        st.info(f"⚠️ Date column could not be fully parsed. Falling back to 'Month' column...")
+        
+        # Try to get year from a year column, or from Date column, or use current year
+        year_col = find_column(df, ["Year", "year", "YEAR"])
+        
+        def construct_date(row):
+            try:
+                month_val = int(float(str(row[month_col]).strip()))
+                if month_val < 1 or month_val > 12:
+                    return pd.NaT
+                
+                # Try to get year
+                year_val = None
+                if year_col and pd.notna(row.get(year_col)):
+                    try:
+                        year_val = int(float(str(row[year_col]).strip()))
+                    except:
+                        pass
+                
+                # Try to extract year from original date string
+                if year_val is None and pd.notna(row.get(date_col)):
+                    date_str = str(row[date_col])
+                    year_match = re.search(r'20\d{2}', date_str)
+                    if year_match:
+                        year_val = int(year_match.group())
+                
+                # Default to current year
+                if year_val is None:
+                    year_val = datetime.now().year
+                
+                return pd.Timestamp(year=year_val, month=month_val, day=1)
+            except:
+                return pd.NaT
+        
+        df["Date"] = df.apply(construct_date, axis=1)
+    
+    # If we still have no valid dates but have a Month column, at minimum populate month
+    return df
+
 # ================= GET CUSTOMER MONTHLY REFUND COUNT =================
 @st.cache_data(ttl=300)
 def get_customer_monthly_refund_count(cash_df, jc_df, manual_df, bzid, month, year):
@@ -207,52 +323,34 @@ def get_customer_monthly_refund_count(cash_df, jc_df, manual_df, bzid, month, ye
     total_count = 0
     
     # Cash/UPI refunds
-    if not cash_df.empty:
-        bzid_col = find_column(cash_df, ["BZID", "Business ID", "BZD", "bzid"])
-        date_col = find_column(cash_df, ["Date", "date", "Timestamp", "timestamp"])
-        if bzid_col and date_col:
-            cash_copy = cash_df.copy()
-            cash_copy["BZID"] = cash_copy[bzid_col].astype(str).str.strip().str.upper()
-            cash_copy["Date"] = pd.to_datetime(cash_copy[date_col], errors="coerce")
-            cash_count = len(cash_copy[
-                (cash_copy["BZID"] == bzid) &
-                (cash_copy["Date"].dt.month == month) &
-                (cash_copy["Date"].dt.year == year) &
-                (cash_copy["Date"].notna())
-            ])
-            total_count += cash_count
+    if not cash_df.empty and "BZID" in cash_df.columns and "Date" in cash_df.columns:
+        cash_count = len(cash_df[
+            (cash_df["BZID"] == bzid) &
+            (cash_df["Date"].dt.month == month) &
+            (cash_df["Date"].dt.year == year) &
+            (cash_df["Date"].notna())
+        ])
+        total_count += cash_count
     
     # Jumbocash refunds
-    if not jc_df.empty:
-        bzid_col = find_column(jc_df, ["BZID", "Business ID", "BZD", "bzid"])
-        date_col = find_column(jc_df, ["Date", "date", "Timestamp", "timestamp"])
-        if bzid_col and date_col:
-            jc_copy = jc_df.copy()
-            jc_copy["BZID"] = jc_copy[bzid_col].astype(str).str.strip().str.upper()
-            jc_copy["Date"] = pd.to_datetime(jc_copy[date_col], errors="coerce")
-            jc_count = len(jc_copy[
-                (jc_copy["BZID"] == bzid) &
-                (jc_copy["Date"].dt.month == month) &
-                (jc_copy["Date"].dt.year == year) &
-                (jc_copy["Date"].notna())
-            ])
-            total_count += jc_count
+    if not jc_df.empty and "BZID" in jc_df.columns and "Date" in jc_df.columns:
+        jc_count = len(jc_df[
+            (jc_df["BZID"] == bzid) &
+            (jc_df["Date"].dt.month == month) &
+            (jc_df["Date"].dt.year == year) &
+            (jc_df["Date"].notna())
+        ])
+        total_count += jc_count
     
     # Manual Cash refunds
-    if not manual_df.empty:
-        bzid_col = find_column(manual_df, ["BZID", "Business ID", "BZD", "bzid"])
-        date_col = find_column(manual_df, ["Date", "date", "Timestamp", "timestamp"])
-        if bzid_col and date_col:
-            manual_copy = manual_df.copy()
-            manual_copy["BZID"] = manual_copy[bzid_col].astype(str).str.strip().str.upper()
-            manual_copy["Date"] = pd.to_datetime(manual_copy[date_col], errors="coerce")
-            manual_count = len(manual_copy[
-                (manual_copy["BZID"] == bzid) &
-                (manual_copy["Date"].dt.month == month) &
-                (manual_copy["Date"].dt.year == year) &
-                (manual_copy["Date"].notna())
-            ])
-            total_count += manual_count
+    if not manual_df.empty and "BZID" in manual_df.columns and "Date" in manual_df.columns:
+        manual_count = len(manual_df[
+            (manual_df["BZID"] == bzid) &
+            (manual_df["Date"].dt.month == month) &
+            (manual_df["Date"].dt.year == year) &
+            (manual_df["Date"].notna())
+        ])
+        total_count += manual_count
     
     return total_count
 
@@ -312,21 +410,10 @@ def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_m
        
         df = df.copy()
        
-        bzid_col = find_column(df, ["BZID", "Business ID", "BZD", "bzid"])
-        if bzid_col is None:
+        if "BZID" not in df.columns:
             return pd.DataFrame(columns=["BZID", "Date", "Amount", "Ticket"])
-        df["BZID"] = df[bzid_col].astype(str).str.strip().str.upper()
        
-        date_col = find_column(df, ["Date", "date", "Timestamp", "timestamp"])
-        if date_col is None:
-            return pd.DataFrame(columns=["BZID", "Date", "Amount", "Ticket"])
-        df["Date"] = pd.to_datetime(df[date_col], errors="coerce")
-        if df["Date"].isna().all():
-            try:
-                df["Date"] = pd.to_datetime(df[date_col], errors="coerce", infer_datetime_format=True)
-            except:
-                pass
-        if df["Date"].isna().all():
+        if "Date" not in df.columns or df["Date"].isna().all():
             return pd.DataFrame(columns=["BZID", "Date", "Amount", "Ticket"])
        
         df = df[(df["Date"].dt.year == year) & (df["Date"].dt.month <= current_month) & (df["Date"].notna())]
@@ -457,11 +544,9 @@ def get_city_analysis(cash_df, jc_df, manual_df, year, current_month):
             return pd.DataFrame(columns=["City", "Amount"])
        
         df = df.copy()
-        date_col = find_column(df, ["Date", "date", "Timestamp", "timestamp"])
-        if date_col is None:
+        if "Date" not in df.columns:
             return pd.DataFrame(columns=["City", "Amount"])
-       
-        df["Date"] = pd.to_datetime(df[date_col], errors="coerce")
+        
         df = df[df["Date"].notna()]
         df = df[(df["Date"].dt.year == year) & (df["Date"].dt.month <= current_month)]
         if df.empty:
@@ -504,11 +589,9 @@ def get_hub_analysis(cash_df, jc_df, manual_df, year, current_month):
             return pd.DataFrame(columns=["Hub", "Amount"])
        
         df = df.copy()
-        date_col = find_column(df, ["Date", "date", "Timestamp", "timestamp"])
-        if date_col is None:
+        if "Date" not in df.columns:
             return pd.DataFrame(columns=["Hub", "Amount"])
-       
-        df["Date"] = pd.to_datetime(df[date_col], errors="coerce")
+        
         df = df[df["Date"].notna()]
         df = df[(df["Date"].dt.year == year) & (df["Date"].dt.month <= current_month)]
         if df.empty:
@@ -560,8 +643,8 @@ def get_bank_transfer_data(bank_df, ticket_id):
         st.warning("Could not find Ticket ID column")
         return pd.DataFrame()
    
-    df[ticket_col] = df[ticket_col].astype(str).str.strip()
-    ticket_id_str = str(ticket_id).strip()
+    df[ticket_col] = df[ticket_col].astype(str).str.replace(r'\s+', '', regex=True)
+    ticket_id_str = str(ticket_id).strip().replace(" ", "")
     df = df[df[ticket_col] == ticket_id_str]
    
     if df.empty:
@@ -610,17 +693,14 @@ def get_bank_transfer_data(bank_df, ticket_id):
 
 # ================= PARSE REFUND VALUE =================
 def parse_refund_value(value):
-    """Parse refund value from various formats (8/-, SP, etc.)"""
     if pd.isna(value):
         return None, False
     
     value_str = str(value).strip()
     
-    # Check if SP
     if value_str.upper() == 'SP':
         return None, True
     
-    # Remove /- and other characters
     value_str = value_str.replace('/-', '').strip()
     
     try:
@@ -630,23 +710,17 @@ def parse_refund_value(value):
 
 # ================= FREEBIE CALCULATOR FUNCTIONS =================
 def parse_freebie_offer(offer_text):
-    """Parse freebie offer to extract quantity and freebie info"""
     if pd.isna(offer_text) or offer_text == "":
         return None, None
     
     offer_text = str(offer_text).lower().strip()
     
-    # ========== NEW: Handle product names as 1:1 freebies ==========
-    # If the offer text is just a product name (no offer format indicators)
-    # then treat it as 1:1 ratio - Buy 1 get 1 free
     offer_indicators = ['+', 'buy', 'get', 'free']
     is_offer_format = any(word in offer_text for word in offer_indicators)
     
     if not is_offer_format:
-        # It's a product name, treat as 1:1
         return 1, 1
     
-    # Pattern: "22+2" or "11+1"
     if '+' in offer_text:
         parts = offer_text.split('+')
         if len(parts) == 2:
@@ -657,7 +731,6 @@ def parse_freebie_offer(offer_text):
             except:
                 pass
     
-    # Pattern: "Buy 12 Get 2 Free" or "Buy 2 get 1"
     if 'buy' in offer_text and 'get' in offer_text:
         numbers = re.findall(r'\d+', offer_text)
         if len(numbers) >= 2:
@@ -668,18 +741,6 @@ def parse_freebie_offer(offer_text):
             except:
                 pass
     
-    # Pattern: "Buy 2 Get 1" (without 'free' keyword)
-    if 'buy' in offer_text and 'get' in offer_text:
-        numbers = re.findall(r'\d+', offer_text)
-        if len(numbers) >= 2:
-            try:
-                ordered = int(numbers[0])
-                free = int(numbers[1])
-                return ordered, free
-            except:
-                pass
-    
-    # Pattern: Check for "Buy X Get Y" pattern
     buy_match = re.search(r'buy\s*(\d+)\s*get\s*(\d+)', offer_text)
     if buy_match:
         try:
@@ -689,11 +750,9 @@ def parse_freebie_offer(offer_text):
         except:
             pass
     
-    # If nothing worked, default to 1:1
     return 1, 1
 
 def calculate_freebie_refund_from_sheet(row, ordered_qty, manual_refund_value=None):
-    """Calculate freebie refund based on sheet data"""
     freebie_offer = row.get('Mentioned Freebie', '')
     if pd.isna(freebie_offer) or freebie_offer == '':
         return 0, "No freebie offer found"
@@ -701,7 +760,6 @@ def calculate_freebie_refund_from_sheet(row, ordered_qty, manual_refund_value=No
     refund_value_raw = row.get('Refund value', '')
     parsed_value, is_sp = parse_refund_value(refund_value_raw)
     
-    # Check if SP
     if is_sp:
         if manual_refund_value is not None and manual_refund_value > 0:
             refund_value = manual_refund_value
@@ -715,7 +773,7 @@ def calculate_freebie_refund_from_sheet(row, ordered_qty, manual_refund_value=No
     ordered_required, free_given = parse_freebie_offer(freebie_offer)
     
     if ordered_required is None or free_given is None:
-        return 0, f"Could not parse offer: '{freebie_offer}'. Please check the freebie offer format."
+        return 0, f"Could not parse offer: '{freebie_offer}'."
     
     expected_freebies = (ordered_qty // ordered_required) * free_given
     missing_freebies = expected_freebies
@@ -753,35 +811,31 @@ with tab1:
             st.warning("Enter BZID")
             st.stop()
        
-        bzid = bzid_input.strip().upper()
+        # Clean the input BZID the SAME way as the sheet data
+        bzid = bzid_input.strip().replace(" ", "").upper()
        
         with st.spinner("Fetching data..."):
-            cash_df = load_sheet(st.secrets["cash_upi_sheet_id"], "Form Responses 1")
-            jc_df = load_sheet(st.secrets["jumbocash_sheet_id"], "Form Responses 1")
-            manual_df = load_sheet(st.secrets["cash_upi_sheet_id"], "cash refund")
-           
-            # Process each dataframe
-            def process_df(df):
-                if df.empty:
-                    return df
-                
-                df_copy = df.copy()
-                
-                bzid_col = find_column(df_copy, ["BZID", "Business ID", "BZD", "bzid"])
-                if bzid_col:
-                    df_copy["BZID"] = df_copy[bzid_col].astype(str).str.strip().str.upper()
-                
-                date_col = find_column(df_copy, ["Date", "date", "Timestamp", "timestamp"])
-                if date_col:
-                    df_copy["Date"] = pd.to_datetime(df_copy[date_col], errors="coerce")
-                else:
-                    df_copy["Date"] = pd.NaT
-                
-                return df_copy
+            cash_df_raw = load_sheet(st.secrets["cash_upi_sheet_id"], "Form Responses 1")
+            jc_df_raw = load_sheet(st.secrets["jumbocash_sheet_id"], "Form Responses 1")
+            manual_df_raw = load_sheet(st.secrets["cash_upi_sheet_id"], "cash refund")
             
-            cash_df = process_df(cash_df)
-            jc_df = process_df(jc_df)
-            manual_df = process_df(manual_df)
+            # Process all dataframes with robust cleaning
+            cash_df = process_refund_df(cash_df_raw)
+            jc_df = process_refund_df(jc_df_raw)
+            manual_df = process_refund_df(manual_df_raw)
+            
+            # Debug info (only shown if debugging is needed)
+            with st.expander("🔧 Debug Info (click to expand)", expanded=False):
+                st.write(f"**Searching for BZID:** `{bzid}`")
+                st.write(f"**Cash/UPI rows:** {len(cash_df)} | Valid dates: {cash_df['Date'].notna().sum()}")
+                st.write(f"**Jumbocash rows:** {len(jc_df)} | Valid dates: {jc_df['Date'].notna().sum()}")
+                st.write(f"**Manual Cash rows:** {len(manual_df)} | Valid dates: {manual_df['Date'].notna().sum()}")
+                
+                if not jc_df.empty:
+                    matching = jc_df[jc_df['BZID'].str.contains(bzid, na=False, regex=False)]
+                    st.write(f"**Rows matching BZID in Jumbocash:** {len(matching)}")
+                    if not matching.empty:
+                        st.write(matching[['BZID', 'Date']].head(10))
            
             cash_current_matches = cash_df[
                 (cash_df["BZID"] == bzid) &
@@ -804,22 +858,23 @@ with tab1:
                 (manual_df["Date"].dt.year == selected_year)
             ] if not manual_df.empty and "BZID" in manual_df.columns and "Date" in manual_df.columns else pd.DataFrame()
            
-            cash_count_current = cash_current_matches["Ticket Number"].nunique() if not cash_current_matches.empty else 0
-            jc_count_current = jc_current_matches["Ticket ID"].nunique() if not jc_current_matches.empty else 0
-            manual_count_current = manual_current_matches["Ticket No"].nunique() if not manual_current_matches.empty else 0
+            cash_count_current = cash_current_matches["Ticket Number"].nunique() if not cash_current_matches.empty and "Ticket Number" in cash_current_matches.columns else len(cash_current_matches)
+            jc_count_current = jc_current_matches["Ticket ID"].nunique() if not jc_current_matches.empty and "Ticket ID" in jc_current_matches.columns else len(jc_current_matches)
+            manual_count_current = manual_current_matches["Ticket No"].nunique() if not manual_current_matches.empty and "Ticket No" in manual_current_matches.columns else len(manual_current_matches)
             total_count_current = cash_count_current + jc_count_current + manual_count_current
            
-            cash_amount_current = pd.to_numeric(cash_current_matches["Amount"], errors="coerce").sum() if not cash_current_matches.empty else 0
-            jc_amount_current = pd.to_numeric(jc_current_matches["Amount"], errors="coerce").sum() if not jc_current_matches.empty else 0
-            manual_amount_current = pd.to_numeric(manual_current_matches["Amount"], errors="coerce").sum() if not manual_current_matches.empty else 0
+            cash_amount_current = pd.to_numeric(cash_current_matches["Amount"], errors="coerce").sum() if not cash_current_matches.empty and "Amount" in cash_current_matches.columns else 0
+            jc_amount_current = pd.to_numeric(jc_current_matches["Amount"], errors="coerce").sum() if not jc_current_matches.empty and "Amount" in jc_current_matches.columns else 0
+            manual_amount_current = pd.to_numeric(manual_current_matches["Amount"], errors="coerce").sum() if not manual_current_matches.empty and "Amount" in manual_current_matches.columns else 0
             total_amount_current = cash_amount_current + jc_amount_current + manual_amount_current
            
             # Create all_refunds for yearly trend
-            all_refunds = pd.concat([
-                cash_df[["BZID", "Date"]] if "BZID" in cash_df.columns and "Date" in cash_df.columns else pd.DataFrame(),
-                jc_df[["BZID", "Date"]] if "BZID" in jc_df.columns and "Date" in jc_df.columns else pd.DataFrame(),
-                manual_df[["BZID", "Date"]] if "BZID" in manual_df.columns and "Date" in manual_df.columns else pd.DataFrame()
-            ], ignore_index=True)
+            all_refunds_list = []
+            for df in [cash_df, jc_df, manual_df]:
+                if not df.empty and "BZID" in df.columns and "Date" in df.columns:
+                    all_refunds_list.append(df[["BZID", "Date"]])
+            
+            all_refunds = pd.concat(all_refunds_list, ignore_index=True) if all_refunds_list else pd.DataFrame()
             
             if not all_refunds.empty:
                 current_year_count = get_refund_count_for_period(all_refunds, bzid, current_year, 1, current_month)
@@ -838,23 +893,17 @@ with tab1:
             st.markdown(f"### {selected_month_label}")
            
             if total_count_current < 5:
-                st.markdown("""
-                <div class="decision-approve">
-                    <div class="decision-icon tick-mark">✅</div>
-                    <div class="decision-text">
-                        <h2 style="color: #28a745; margin: 0;">APPROVED</h2>
-                        <p style="font-size: 18px; margin: 5px 0;">Total Refunds: """ + str(total_count_current) + """ (Less than 5)</p>
-                    </div>
+                st.markdown(f"""
+                <div style="background-color: #d4edda; padding: 20px; border-radius: 10px; text-align: center;">
+                    <h1 style="color: #28a745; margin: 0;">✅ APPROVED</h1>
+                    <p style="font-size: 18px; margin: 5px 0;">Total Refunds: {total_count_current} (Less than 5)</p>
                 </div>
                 """, unsafe_allow_html=True)
             else:
-                st.markdown("""
-                <div class="decision-deny">
-                    <div class="decision-icon cross-mark">❌</div>
-                    <div class="decision-text">
-                        <h2 style="color: #dc3545; margin: 0;">DENIED</h2>
-                        <p style="font-size: 18px; margin: 5px 0;">Total Refunds: """ + str(total_count_current) + """ (5 or more - Limit reached)</p>
-                    </div>
+                st.markdown(f"""
+                <div style="background-color: #f8d7da; padding: 20px; border-radius: 10px; text-align: center;">
+                    <h1 style="color: #dc3545; margin: 0;">❌ DENIED</h1>
+                    <p style="font-size: 18px; margin: 5px 0;">Total Refunds: {total_count_current} (5 or more - Limit reached)</p>
                 </div>
                 """, unsafe_allow_html=True)
            
@@ -914,7 +963,7 @@ with tab1:
             col1, col2, col3 = st.columns([1, 1, 2])
             with col1:
                 st.markdown(f"""
-                <div class="trend-card">
+                <div style="background-color: #667eea; border-radius: 10px; padding: 20px; color: white;">
                     <p style="margin: 0; opacity: 0.8;">Current Year</p>
                     <h2 style="margin: 5px 0;">{current_year}</h2>
                     <h1 style="margin: 5px 0;">{current_year_count}</h1>
@@ -924,7 +973,7 @@ with tab1:
            
             with col2:
                 st.markdown(f"""
-                <div class="trend-card-previous">
+                <div style="background-color: #764ba2; border-radius: 10px; padding: 20px; color: white;">
                     <p style="margin: 0; opacity: 0.8;">Previous Year</p>
                     <h2 style="margin: 5px 0;">{current_year - 1}</h2>
                     <h1 style="margin: 5px 0;">{last_year_count}</h1>
@@ -1046,7 +1095,7 @@ with tab3:
     st.markdown("## 🚨 High Risk Customers")
    
     st.markdown("""
-    <div class="info-box">
+    <div style="background-color: #e7f3ff; padding: 15px; border-radius: 10px; border-left: 4px solid #2196F3;">
         <b>📖 Risk Assessment:</b><br>
         🔴🔴 EXTREME: (Amount > ₹500 AND Avg >= 3) OR (4+ refunds EVERY month) OR (5+ refunds in ANY month)<br>
         🔴 HIGH: Amount <= ₹500 AND Avg >= 3<br>
@@ -1056,9 +1105,9 @@ with tab3:
    
     @st.cache_data(ttl=300)
     def load_all_data():
-        cash_df = load_sheet(st.secrets["cash_upi_sheet_id"], "Form Responses 1")
-        jc_df = load_sheet(st.secrets["jumbocash_sheet_id"], "Form Responses 1")
-        manual_df = load_sheet(st.secrets["cash_upi_sheet_id"], "cash refund")
+        cash_df = process_refund_df(load_sheet(st.secrets["cash_upi_sheet_id"], "Form Responses 1"))
+        jc_df = process_refund_df(load_sheet(st.secrets["jumbocash_sheet_id"], "Form Responses 1"))
+        manual_df = process_refund_df(load_sheet(st.secrets["cash_upi_sheet_id"], "cash refund"))
         return cash_df, jc_df, manual_df
    
     if 'high_risk_data' not in st.session_state:
@@ -1139,9 +1188,9 @@ with tab4:
    
     @st.cache_data(ttl=300)
     def load_city_data():
-        cash_df = load_sheet(st.secrets["cash_upi_sheet_id"], "Form Responses 1")
-        jc_df = load_sheet(st.secrets["jumbocash_sheet_id"], "Form Responses 1")
-        manual_df = load_sheet(st.secrets["cash_upi_sheet_id"], "cash refund")
+        cash_df = process_refund_df(load_sheet(st.secrets["cash_upi_sheet_id"], "Form Responses 1"))
+        jc_df = process_refund_df(load_sheet(st.secrets["jumbocash_sheet_id"], "Form Responses 1"))
+        manual_df = process_refund_df(load_sheet(st.secrets["cash_upi_sheet_id"], "cash refund"))
         return cash_df, jc_df, manual_df
    
     if 'city_data' not in st.session_state:
@@ -1188,9 +1237,9 @@ with tab5:
    
     @st.cache_data(ttl=300)
     def load_hub_data():
-        cash_df = load_sheet(st.secrets["cash_upi_sheet_id"], "Form Responses 1")
-        jc_df = load_sheet(st.secrets["jumbocash_sheet_id"], "Form Responses 1")
-        manual_df = load_sheet(st.secrets["cash_upi_sheet_id"], "cash refund")
+        cash_df = process_refund_df(load_sheet(st.secrets["cash_upi_sheet_id"], "Form Responses 1"))
+        jc_df = process_refund_df(load_sheet(st.secrets["jumbocash_sheet_id"], "Form Responses 1"))
+        manual_df = process_refund_df(load_sheet(st.secrets["cash_upi_sheet_id"], "cash refund"))
         return cash_df, jc_df, manual_df
    
     if 'hub_data' not in st.session_state:
@@ -1235,11 +1284,10 @@ with tab6:
     st.markdown("## 🎁 Freebie Refund Calculator")
     st.markdown("*Enter BZID, select product and month, enter quantity to calculate freebie refund and get approval decision*")
     
-    # Load all data
     try:
-        cash_df = load_sheet(st.secrets["cash_upi_sheet_id"], "Form Responses 1")
-        jc_df = load_sheet(st.secrets["jumbocash_sheet_id"], "Form Responses 1")
-        manual_df = load_sheet(st.secrets["cash_upi_sheet_id"], "cash refund")
+        cash_df = process_refund_df(load_sheet(st.secrets["cash_upi_sheet_id"], "Form Responses 1"))
+        jc_df = process_refund_df(load_sheet(st.secrets["jumbocash_sheet_id"], "Form Responses 1"))
+        manual_df = process_refund_df(load_sheet(st.secrets["cash_upi_sheet_id"], "cash refund"))
         freebie_df = load_freebie_data()
     except:
         cash_df = pd.DataFrame()
@@ -1257,7 +1305,6 @@ with tab6:
         st.warning("No freebie data found in the sheet.")
         st.stop()
     
-    # Show available freebie offers
     st.markdown("### 📋 Available Freebie Offers")
     st.dataframe(
         freebie_df[['Date', 'Item', 'Mentioned Freebie', 'Refund value']],
@@ -1271,7 +1318,6 @@ with tab6:
         }
     )
     
-    # Check if any row has "SP" in Refund value
     has_sp = any(freebie_df['Refund value'].astype(str).str.upper().str.strip() == 'SP')
     
     if has_sp:
@@ -1297,7 +1343,7 @@ with tab6:
     
     with col2:
         month_options = {datetime(current_year, i, 1).strftime("%B %Y"): i for i in range(1, 13)}
-        selected_month_label = st.selectbox("Select Month for Refund Count", list(month_options.keys()))
+        selected_month_label = st.selectbox("Select Month for Refund Count", list(month_options.keys()), key="freebie_month")
         selected_month = month_options[selected_month_label]
         selected_year = int(selected_month_label.split()[-1])
         
@@ -1309,7 +1355,6 @@ with tab6:
             help="Total quantity of the item the customer ordered"
         )
     
-    # Get selected product details
     selected_row = freebie_df[freebie_df['Item'] == selected_product].iloc[0] if selected_product else None
     
     if selected_row is not None:
@@ -1317,7 +1362,6 @@ with tab6:
         refund_value_raw = selected_row.get('Refund value', '')
         freebie_date = selected_row.get('Date', '')
         
-        # Parse the refund value
         parsed_value, is_sp = parse_refund_value(refund_value_raw)
         display_value = "SP" if is_sp else (f"₹{parsed_value:.2f}" if parsed_value is not None else refund_value_raw)
         
@@ -1327,9 +1371,8 @@ with tab6:
         if ordered_required and free_given:
             st.info(f"**Offer Details:** Buy {ordered_required} get {free_given} free")
         else:
-            st.warning(f"⚠️ Could not parse freebie offer: '{freebie_offer}'. Please check if the offer follows the format like '22+2' or 'Buy 2 get 1'.")
+            st.warning(f"⚠️ Could not parse freebie offer: '{freebie_offer}'.")
     
-    # Manual selling price input (shown only if SP is selected)
     manual_price = None
     if selected_row is not None:
         _, is_sp = parse_refund_value(selected_row.get('Refund value', ''))
@@ -1342,13 +1385,12 @@ with tab6:
                 help="Enter the selling price of the product"
             )
     
-    # Calculate button
     if st.button("🧮 Calculate Refund", type="primary"):
         if not bzid_input:
             st.error("❌ Please enter BZID")
             st.stop()
         
-        bzid = bzid_input.strip().upper()
+        bzid = bzid_input.strip().replace(" ", "").upper()
         
         if selected_row is None:
             st.error("❌ Please select a product")
@@ -1358,28 +1400,23 @@ with tab6:
             st.error("❌ Quantity Ordered must be greater than 0")
             st.stop()
         
-        # Check if SP and manual price is entered
         _, is_sp = parse_refund_value(selected_row.get('Refund value', ''))
         
         if is_sp and (manual_price is None or manual_price <= 0):
             st.error("❌ Please enter the selling price for this product")
             st.stop()
         
-        # Calculate freebie refund
         refund_amount, calculation_details = calculate_freebie_refund_from_sheet(
             selected_row, ordered_qty, manual_price
         )
         
-        # Get customer's total monthly refund count across all refund types
         total_monthly_count = get_customer_monthly_refund_count(
             cash_df, jc_df, manual_df, bzid, selected_month, selected_year
         )
         
-        # Display Results
         st.markdown("---")
         st.markdown("## 📊 Refund Calculation & Decision")
         
-        # Show calculation details
         st.markdown("### 📈 Calculation Breakdown")
         
         ordered_required, free_given = parse_freebie_offer(freebie_offer)
@@ -1395,7 +1432,6 @@ with tab6:
             st.write(f"**Quantity Ordered:** {ordered_qty}")
             st.write(f"**Freebies Expected:** {expected_freebies}")
             
-            # Display the correct refund value
             if is_sp:
                 st.write(f"**Selling Price (Manual):** ₹{manual_price:.2f}")
             else:
@@ -1411,11 +1447,6 @@ with tab6:
             st.markdown("#### Decision")
             st.write(f"**Month:** {selected_month_label}")
             st.write(f"**Total Monthly Refund Count:** {total_monthly_count}")
-            
-            # Decision logic for freebie refunds:
-            # 1. Must have refund amount > 0
-            # 2. Refund amount must be < ₹100
-            # 3. Total monthly refund count must be < 5
             
             if refund_amount == 0:
                 decision = "NO REFUND"
@@ -1442,79 +1473,45 @@ with tab6:
             </div>
             """, unsafe_allow_html=True)
         
-        # Additional details
         st.markdown("---")
         st.markdown("### 📋 Detailed Breakdown")
         
-        st.markdown("""
-        <table class="freebie-table">
-            <tr>
-                <th>Description</th>
-                <th>Value</th>
-            </tr>
-        """, unsafe_allow_html=True)
-        
-        # Get the refund value for display
         if is_sp:
             display_refund_value = manual_price
         else:
             parsed_val, _ = parse_refund_value(selected_row.get('Refund value', ''))
             display_refund_value = parsed_val if parsed_val else 0
         
-        # Show offer parsing status
         offer_parsed = "✅ Parsed" if (ordered_required and free_given) else "❌ Could not parse"
         
         st.markdown(f"""
-            <tr>
-                <td>BZID</td>
-                <td>{bzid}</td>
+        <table style="width: 100%; border-collapse: collapse; margin-top: 10px;">
+            <tr style="background-color: #667eea; color: white;">
+                <th style="padding: 10px; text-align: left;">Description</th>
+                <th style="padding: 10px; text-align: left;">Value</th>
             </tr>
-            <tr>
-                <td>Product</td>
-                <td>{selected_product}</td>
-            </tr>
-            <tr>
-                <td>Freebie Offer</td>
-                <td>{freebie_offer}</td>
-            </tr>
-            <tr>
-                <td>Offer Parse Status</td>
-                <td>{offer_parsed}</td>
-            </tr>
-            <tr>
-                <td>Quantity Ordered</td>
-                <td>{ordered_qty}</td>
-            </tr>
-            <tr>
-                <td>Freebies Expected</td>
-                <td>{expected_freebies}</td>
-            </tr>
-            <tr>
-                <td>Refund Value per Freebie</td>
-                <td>₹{display_refund_value:.2f}</td>
-            </tr>
-            <tr>
-                <td>Total Refund Amount</td>
-                <td>₹{refund_amount:.2f}</td>
-            </tr>
-            <tr>
-                <td>Monthly Refund Count (All Types)</td>
-                <td>{total_monthly_count}</td>
-            </tr>
+            <tr><td style="padding: 10px; border-bottom: 1px solid #dee2e6;">BZID</td><td style="padding: 10px; border-bottom: 1px solid #dee2e6;">{bzid}</td></tr>
+            <tr><td style="padding: 10px; border-bottom: 1px solid #dee2e6;">Product</td><td style="padding: 10px; border-bottom: 1px solid #dee2e6;">{selected_product}</td></tr>
+            <tr><td style="padding: 10px; border-bottom: 1px solid #dee2e6;">Freebie Offer</td><td style="padding: 10px; border-bottom: 1px solid #dee2e6;">{freebie_offer}</td></tr>
+            <tr><td style="padding: 10px; border-bottom: 1px solid #dee2e6;">Offer Parse Status</td><td style="padding: 10px; border-bottom: 1px solid #dee2e6;">{offer_parsed}</td></tr>
+            <tr><td style="padding: 10px; border-bottom: 1px solid #dee2e6;">Quantity Ordered</td><td style="padding: 10px; border-bottom: 1px solid #dee2e6;">{ordered_qty}</td></tr>
+            <tr><td style="padding: 10px; border-bottom: 1px solid #dee2e6;">Freebies Expected</td><td style="padding: 10px; border-bottom: 1px solid #dee2e6;">{expected_freebies}</td></tr>
+            <tr><td style="padding: 10px; border-bottom: 1px solid #dee2e6;">Refund Value per Freebie</td><td style="padding: 10px; border-bottom: 1px solid #dee2e6;">₹{display_refund_value:.2f}</td></tr>
+            <tr><td style="padding: 10px; border-bottom: 1px solid #dee2e6;">Total Refund Amount</td><td style="padding: 10px; border-bottom: 1px solid #dee2e6;">₹{refund_amount:.2f}</td></tr>
+            <tr><td style="padding: 10px; border-bottom: 1px solid #dee2e6;">Monthly Refund Count (All Types)</td><td style="padding: 10px; border-bottom: 1px solid #dee2e6;">{total_monthly_count}</td></tr>
             <tr style="background-color: {'#d4edda' if refund_amount > 0 and refund_amount < 100 and total_monthly_count < 5 else '#f8d7da'}; font-weight: bold;">
-                <td>Decision</td>
-                <td style="color: {'#28a745' if refund_amount > 0 and refund_amount < 100 and total_monthly_count < 5 else '#dc3545' if refund_amount > 0 else '#ffc107'};">
+                <td style="padding: 10px;">Decision</td>
+                <td style="padding: 10px; color: {'#28a745' if refund_amount > 0 and refund_amount < 100 and total_monthly_count < 5 else '#dc3545' if refund_amount > 0 else '#ffc107'};">
                     {'✅ APPROVED' if refund_amount > 0 and refund_amount < 100 and total_monthly_count < 5 else '❌ DENIED' if refund_amount > 0 else 'ℹ️ NO REFUND'}
                 </td>
             </tr>
             <tr style="background-color: #d4edda; font-weight: bold;">
-                <td>Final Refund Amount</td>
-                <td style="color: #28a745; font-size: 18px;">₹{refund_amount:.2f}</td>
+                <td style="padding: 10px;">Final Refund Amount</td>
+                <td style="padding: 10px; color: #28a745; font-size: 18px;">₹{refund_amount:.2f}</td>
             </tr>
         </table>
         """, unsafe_allow_html=True)
         
-        # Show helpful message for unparsable offers
         if not ordered_required or not free_given:
             st.warning("""
             ⚠️ **Could not parse the freebie offer.**
@@ -1524,12 +1521,9 @@ with tab6:
             - `11+1` (Buy 11 get 1 free)
             - `Buy 12 Get 2 Free` (Buy 12 get 2 free)
             - `Buy 2 get 1` (Buy 2 get 1 free)
-            - Or just the product name (e.g., "Scrub pad") for 1:1 freebie ratio
-            
-            For 1:1 ratio, simply put the product name in the 'Mentioned Freebie' column.
+            - Or just the product name for 1:1 freebie ratio
             """)
         
-        # Process Refund Button
         if refund_amount > 0 and refund_amount < 100 and total_monthly_count < 5:
             st.markdown("---")
             st.markdown("### 🚀 Process Refund")
@@ -1538,10 +1532,9 @@ with tab6:
                 st.success(f"✅ Refund of ₹{refund_amount:.2f} initiated successfully for BZID: {bzid}!")
                 st.info("📌 Please verify the refund in the Refund Tracker")
     
-    # Info box at bottom - UPDATED with 1:1 rule
     st.markdown("---")
     st.markdown("""
-    <div class="freebie-info">
+    <div style="background-color: #f0f7ff; padding: 15px; border-radius: 10px; border-left: 4px solid #2196F3;">
         <b>📌 Freebie Refund Rules:</b><br>
         1. Refund amount must be < ₹100 to be approved<br>
         2. Customer must have less than 5 total refunds in the month<br>
@@ -1553,8 +1546,7 @@ with tab6:
         • <b>"Buy 12 Get 2 Free"</b> → Buy 12 get 2 free<br>
         • <b>"Buy 2 get 1"</b> → Buy 2 get 1 free<br><br>
         <b>Special Case - SP (Selling Price):</b><br>
-        • When refund value is "SP", you need to enter the selling price manually<br>
-        • The system will use your entered price to calculate the refund<br><br>
+        • When refund value is "SP", you need to enter the selling price manually<br><br>
         <b>How it works:</b><br>
         1. Enter the customer's BZID<br>
         2. Select the product and month<br>
