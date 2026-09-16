@@ -71,14 +71,18 @@ def standardize_city_name(city):
    
     return city
 
-# ================= GOOGLE AUTH =================
+# ================= GOOGLE AUTH (READ-ONLY) =================
 @st.cache_resource
 def get_client():
+    """
+    Authorize with READ-ONLY scopes.
+    This makes it impossible for the app to modify any Google Sheet.
+    """
     creds = Credentials.from_service_account_info(
         st.secrets["gcp_service_account"],
         scopes=[
-            "https://www.googleapis.com/auth/spreadsheets",
-            "https://www.googleapis.com/auth/drive"
+            "https://www.googleapis.com/auth/spreadsheets.readonly",
+            "https://www.googleapis.com/auth/drive.readonly",
         ],
     )
     return gspread.authorize(creds)
@@ -114,7 +118,6 @@ def find_column(df, possible_names):
 def parse_dates_robust(series):
     """
     Try multiple date formats to parse a pandas Series of dates.
-    Returns a datetime Series.
     """
     parsed = pd.to_datetime(series, errors="coerce")
     if parsed.notna().sum() > 0:
@@ -145,9 +148,12 @@ def parse_dates_robust(series):
     
     return pd.Series([pd.NaT] * len(series), index=series.index)
 
-# ================= LOAD SHEETS =================
+# ================= LOAD SHEETS (READ-ONLY) =================
 @st.cache_data(ttl=300)
 def load_sheet(sheet_id, sheet_name):
+    """
+    Read data from a Google Sheet. This function ONLY READS - it never writes.
+    """
     try:
         client = get_client()
         sheet = client.open_by_key(sheet_id)
@@ -164,6 +170,7 @@ def load_sheet(sheet_id, sheet_name):
             else:
                 return pd.DataFrame()
        
+        # READ ONLY
         data = ws.get_all_values()
        
         if len(data) <= 1:
@@ -235,20 +242,19 @@ def load_freebie_data():
 def process_refund_df(df):
     """
     Process a refund dataframe: clean BZID, parse dates with multiple fallbacks.
+    Purely in-memory transformation.
     """
     if df.empty:
         return df
     
     df = df.copy()
     
-    # Clean BZID - remove ALL whitespace
     bzid_col = find_column(df, ["BZID", "Business ID", "BZD", "bzid"])
     if bzid_col:
         df["BZID"] = df[bzid_col].astype(str).str.replace(r'\s+', '', regex=True).str.upper()
     else:
         df["BZID"] = ""
     
-    # Find date column and parse
     date_col = find_column(df, ["Date", "date", "Timestamp", "timestamp"])
     if date_col:
         parsed_dates = parse_dates_robust(df[date_col])
@@ -293,14 +299,6 @@ def process_refund_df(df):
         df["Date"] = df.apply(construct_date, axis=1)
     
     return df
-
-# ================= COUNT ROWS (each row = one refund) =================
-def count_refunds(df):
-    """
-    Count refunds by counting rows. Each row in the sheet = one refund event.
-    This means duplicate ticket IDs are counted separately (to catch abuse).
-    """
-    return len(df)
 
 # ================= GET CUSTOMER MONTHLY REFUND COUNT =================
 @st.cache_data(ttl=300)
@@ -366,140 +364,226 @@ def get_monthly_counts(df, bzid, year):
         month_names.append(datetime(year, month, 1).strftime("%B"))
     return month_names, monthly_counts
 
-# ================= GET HIGH RISK CUSTOMERS =================
+# ================= HIGH RISK CUSTOMERS (3-TIER TIME WINDOW) =================
 @st.cache_data(ttl=300)
 def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_month):
+    """
+    3-tier risk analysis:
+      TIER 1 (3-MONTH)  → primary filter, high frequency + high amount in last 3 months
+      TIER 2 (6-MONTH)  → secondary, only if not caught in Tier 1
+      TIER 3 (YEARLY)   → final catch-all over the whole year
+    Each customer appears only ONCE, in the highest tier they qualify for.
+    """
     if current_month is None:
         return pd.DataFrame()
-   
+
     def prepare_df(df):
         if df.empty:
             return pd.DataFrame(columns=["BZID", "Date", "Amount", "Ticket"])
-       
+
         df = df.copy()
-       
+
         if "BZID" not in df.columns:
             return pd.DataFrame(columns=["BZID", "Date", "Amount", "Ticket"])
-       
+
         if "Date" not in df.columns or df["Date"].isna().all():
             return pd.DataFrame(columns=["BZID", "Date", "Amount", "Ticket"])
-       
-        df = df[(df["Date"].dt.year == year) & (df["Date"].dt.month <= current_month) & (df["Date"].notna())]
+
+        df = df[
+            (df["Date"].dt.year == year) &
+            (df["Date"].dt.month <= current_month) &
+            (df["Date"].notna())
+        ]
         if df.empty:
             return pd.DataFrame(columns=["BZID", "Date", "Amount", "Ticket"])
-       
+
         amount_col = find_column(df, ["Amount", "amount", "Refund Amount"])
         if amount_col:
             df["Amount"] = pd.to_numeric(df[amount_col], errors="coerce").fillna(0)
         else:
             df["Amount"] = 0
-       
-        # Use row index as unique ticket identifier (each row = 1 refund)
+
         df["Ticket"] = df.index.astype(str) + "_" + df["BZID"].astype(str)
-       
+
         return df[["BZID", "Date", "Amount", "Ticket"]]
-   
+
     cash_prep = prepare_df(cash_df)
     jc_prep = prepare_df(jc_df)
     manual_prep = prepare_df(manual_df)
-   
+
     all_data = pd.concat([cash_prep, jc_prep, manual_prep], ignore_index=True)
     if all_data.empty:
         return pd.DataFrame()
-   
+
     if not pd.api.types.is_datetime64_any_dtype(all_data["Date"]):
         all_data["Date"] = pd.to_datetime(all_data["Date"], errors="coerce")
     all_data = all_data[all_data["Date"].notna()]
     if all_data.empty:
         return pd.DataFrame()
-   
+
     all_data["Month"] = all_data["Date"].dt.month
-   
-    monthly_summary = all_data.groupby(["BZID", "Month"]).agg(
-        Refund_Count=("Ticket", "count"),
-        Total_Amount=("Amount", "sum")
-    ).reset_index()
-   
-    monthly_counts_pivot = monthly_summary.pivot(
-        index="BZID", columns="Month", values="Refund_Count"
-    ).fillna(0)
-    monthly_amounts_pivot = monthly_summary.pivot(
-        index="BZID", columns="Month", values="Total_Amount"
-    ).fillna(0)
-   
-    for month in range(1, current_month + 1):
-        if month not in monthly_counts_pivot.columns:
-            monthly_counts_pivot[month] = 0
-        if month not in monthly_amounts_pivot.columns:
-            monthly_amounts_pivot[month] = 0
-   
-    monthly_counts_pivot = monthly_counts_pivot[sorted(monthly_counts_pivot.columns)]
-    monthly_amounts_pivot = monthly_amounts_pivot[sorted(monthly_amounts_pivot.columns)]
-   
-    month_abbr = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-   
-    results = []
-   
-    for bzid in monthly_counts_pivot.index:
-        monthly_counts = monthly_counts_pivot.loc[bzid].values.tolist()
-        monthly_amounts = monthly_amounts_pivot.loc[bzid].values.tolist()
-       
-        if sum(monthly_counts) == 0:
-            continue
-       
-        total_refunds = sum(monthly_counts)
-        avg_refunds = total_refunds / current_month
-        months_with_refunds = sum(1 for c in monthly_counts if c > 0)
-        max_monthly_refunds = max(monthly_counts) if monthly_counts else 0
-       
-        last_3_months = monthly_counts[-3:] if len(monthly_counts) >= 3 else monthly_counts
-        active_in_last_3 = sum(1 for c in last_3_months if c > 0) >= 2
-        total_amount = sum(monthly_amounts)
-       
-        cash_total = cash_prep[cash_prep["BZID"] == bzid]["Amount"].sum() if not cash_prep.empty else 0
-        jc_total = jc_prep[jc_prep["BZID"] == bzid]["Amount"].sum() if not jc_prep.empty else 0
-        manual_total = manual_prep[manual_prep["BZID"] == bzid]["Amount"].sum() if not manual_prep.empty else 0
-       
-        consistent_defaulter = all(count >= 4 for count in monthly_counts[:current_month])
-        has_policy_breach = max_monthly_refunds >= 5
-        frequent_user = months_with_refunds >= 4
-       
-        if (total_amount > 500 and avg_refunds >= 3) or consistent_defaulter or has_policy_breach:
-            risk_level = "🔴🔴 EXTREME"
-        elif total_amount <= 500 and avg_refunds >= 3:
-            risk_level = "🔴 HIGH"
-        elif avg_refunds >= 2 or months_with_refunds >= 3 or frequent_user:
-            risk_level = "🟡 POTENTIAL"
-        else:
-            continue
-       
-        monthly_breakdown = {}
-        for i, (count, amount) in enumerate(zip(monthly_counts, monthly_amounts)):
-            if i < current_month:
-                if count > 0:
-                    monthly_breakdown[month_abbr[i]] = f"{int(count)} [₹{amount:.0f}]"
+
+    m3_start = max(1, current_month - 2)
+    m3_end = current_month
+
+    m6_start = max(1, current_month - 5)
+    m6_end = current_month
+
+    def analyze_window(start_m, end_m):
+        window_df = all_data[
+            (all_data["Month"] >= start_m) & (all_data["Month"] <= end_m)
+        ]
+        if window_df.empty:
+            return pd.DataFrame()
+
+        months_in_window = end_m - start_m + 1
+
+        monthly_summary = window_df.groupby(["BZID", "Month"]).agg(
+            Refund_Count=("Ticket", "count"),
+            Total_Amount=("Amount", "sum")
+        ).reset_index()
+
+        monthly_counts_pivot = monthly_summary.pivot(
+            index="BZID", columns="Month", values="Refund_Count"
+        ).fillna(0)
+        monthly_amounts_pivot = monthly_summary.pivot(
+            index="BZID", columns="Month", values="Total_Amount"
+        ).fillna(0)
+
+        for m in range(start_m, end_m + 1):
+            if m not in monthly_counts_pivot.columns:
+                monthly_counts_pivot[m] = 0
+            if m not in monthly_amounts_pivot.columns:
+                monthly_amounts_pivot[m] = 0
+
+        monthly_counts_pivot = monthly_counts_pivot[sorted(monthly_counts_pivot.columns)]
+        monthly_amounts_pivot = monthly_amounts_pivot[sorted(monthly_amounts_pivot.columns)]
+
+        month_abbr = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+        results = []
+        for bzid in monthly_counts_pivot.index:
+            counts = monthly_counts_pivot.loc[bzid].values.tolist()
+            amounts = monthly_amounts_pivot.loc[bzid].values.tolist()
+
+            total_refunds = int(sum(counts))
+            if total_refunds == 0:
+                continue
+
+            total_amount = float(sum(amounts))
+            avg_refunds = total_refunds / months_in_window
+            months_with_refunds = sum(1 for c in counts if c > 0)
+            max_monthly_refunds = int(max(counts)) if counts else 0
+            max_monthly_amount = float(max(amounts)) if amounts else 0
+
+            last_2 = counts[-2:] if len(counts) >= 2 else counts
+            active_recently = sum(1 for c in last_2 if c > 0) >= 1
+
+            bzid_cash = cash_prep[cash_prep["BZID"] == bzid]["Amount"].sum() if not cash_prep.empty else 0
+            bzid_jc = jc_prep[jc_prep["BZID"] == bzid]["Amount"].sum() if not jc_prep.empty else 0
+            bzid_manual = manual_prep[manual_prep["BZID"] == bzid]["Amount"].sum() if not manual_prep.empty else 0
+
+            monthly_breakdown = {}
+            for i, (c, a) in enumerate(zip(counts, amounts)):
+                m_num = start_m + i
+                abbr = month_abbr[m_num - 1]
+                if c > 0:
+                    monthly_breakdown[abbr] = f"{int(c)} [₹{a:.0f}]"
                 else:
-                    monthly_breakdown[month_abbr[i]] = "0"
-       
-        activity_status = "🔴 Active" if active_in_last_3 else "⏸️ Inactive"
-       
-        results.append({
-            "BZID": bzid,
-            "Risk Level": risk_level,
-            "Status": activity_status,
-            "Total Refunds": total_refunds,
-            "Monthly Average": round(avg_refunds, 2),
-            "Months Active": months_with_refunds,
-            "Max Monthly Refunds": max_monthly_refunds,
-            "Total Amount": round(total_amount, 2),
-            "Cash_UPI": round(cash_total, 2),
-            "Jumbocash": round(jc_total, 2),
-            "Manual_Cash": round(manual_total, 2),
-            **monthly_breakdown
-        })
-   
-    return pd.DataFrame(results)
+                    monthly_breakdown[abbr] = "0"
+
+            results.append({
+                "BZID": bzid,
+                "Total Refunds": total_refunds,
+                "Monthly Average": round(avg_refunds, 2),
+                "Months Active": months_with_refunds,
+                "Max Monthly Refunds": max_monthly_refunds,
+                "Max Monthly Amount": round(max_monthly_amount, 2),
+                "Total Amount": round(total_amount, 2),
+                "Cash_UPI": round(bzid_cash, 2),
+                "Jumbocash": round(bzid_jc, 2),
+                "Manual_Cash": round(bzid_manual, 2),
+                "Active Recently": active_recently,
+                **monthly_breakdown
+            })
+
+        return pd.DataFrame(results)
+
+    df_3m = analyze_window(m3_start, m3_end)
+    df_6m = analyze_window(m6_start, m6_end)
+    df_yr = analyze_window(1, current_month)
+
+    if df_3m.empty and df_6m.empty and df_yr.empty:
+        return pd.DataFrame()
+
+    classified_bzids = set()
+    final_rows = []
+
+    def risk_level_for(row, window_months):
+        total_amt = row["Total Amount"]
+        avg = row["Monthly Average"]
+        max_m = row["Max Monthly Refunds"]
+        months_active = row["Months Active"]
+
+        if (total_amt > 500 and avg >= 3) or max_m >= 5 or (months_active >= window_months and avg >= 3):
+            return "🔴🔴 EXTREME"
+        if avg >= 3 or max_m >= 4:
+            return "🔴 HIGH"
+        if avg >= 2 or months_active >= max(2, window_months - 1):
+            return "🟡 POTENTIAL"
+        return None
+
+    # --- TIER 1: Last 3 months ---
+    if not df_3m.empty:
+        for _, row in df_3m.iterrows():
+            lvl = risk_level_for(row, 3)
+            if lvl:
+                r = row.to_dict()
+                r["Risk Level"] = lvl
+                r["Analysis Window"] = f"📅 Last 3 Months ({m3_start}-{m3_end})"
+                r["Window Months"] = 3
+                r["Status"] = "🔴 Active" if row["Active Recently"] else "⏸️ Inactive"
+                r["Tier Priority"] = 1
+                final_rows.append(r)
+                classified_bzids.add(row["BZID"])
+
+    # --- TIER 2: Last 6 months ---
+    if not df_6m.empty:
+        for _, row in df_6m.iterrows():
+            if row["BZID"] in classified_bzids:
+                continue
+            lvl = risk_level_for(row, 6)
+            if lvl:
+                r = row.to_dict()
+                r["Risk Level"] = lvl
+                r["Analysis Window"] = f"📅 Last 6 Months ({m6_start}-{m6_end})"
+                r["Window Months"] = 6
+                r["Status"] = "🔴 Active" if row["Active Recently"] else "⏸️ Inactive"
+                r["Tier Priority"] = 2
+                final_rows.append(r)
+                classified_bzids.add(row["BZID"])
+
+    # --- TIER 3: Full year ---
+    if not df_yr.empty:
+        for _, row in df_yr.iterrows():
+            if row["BZID"] in classified_bzids:
+                continue
+            lvl = risk_level_for(row, current_month)
+            if lvl:
+                r = row.to_dict()
+                r["Risk Level"] = lvl
+                r["Analysis Window"] = f"📆 Full Year (1-{current_month})"
+                r["Window Months"] = current_month
+                r["Status"] = "🔴 Active" if row["Active Recently"] else "⏸️ Inactive"
+                r["Tier Priority"] = 3
+                final_rows.append(r)
+                classified_bzids.add(row["BZID"])
+
+    if not final_rows:
+        return pd.DataFrame()
+
+    return pd.DataFrame(final_rows)
 
 # ================= CITY ANALYSIS =================
 @st.cache_data(ttl=300)
@@ -820,7 +904,6 @@ with tab1:
                 (manual_df["Date"].dt.year == selected_year)
             ] if not manual_df.empty and "BZID" in manual_df.columns and "Date" in manual_df.columns else pd.DataFrame()
            
-            # COUNT ROWS - each row = one refund
             cash_count_current = len(cash_current_matches)
             jc_count_current = len(jc_current_matches)
             manual_count_current = len(manual_current_matches)
@@ -1058,10 +1141,15 @@ with tab3:
    
     st.markdown("""
     <div style="background-color: #e7f3ff; padding: 15px; border-radius: 10px; border-left: 4px solid #2196F3;">
-        <b>📖 Risk Assessment:</b><br>
-        🔴🔴 EXTREME: (Amount > ₹500 AND Avg >= 3) OR (4+ refunds EVERY month) OR (5+ refunds in ANY month)<br>
-        🔴 HIGH: Amount <= ₹500 AND Avg >= 3<br>
-        🟡 POTENTIAL: Avg >= 2 OR Active in 3+ months OR Refunds in 4+ months
+        <b>📖 Risk Assessment (3-Tier Time Window):</b><br>
+        <b>📅 Tier 1 — Last 3 Months</b> (highest priority): High frequency + high amount refunds<br>
+        <b>📅 Tier 2 — Last 6 Months</b>: Customers not caught in Tier 1 but showing patterns over 6 months<br>
+        <b>📆 Tier 3 — Full Year</b>: Final catch-all for the rest of the year<br><br>
+        <b>Risk Levels (applied within each tier):</b><br>
+        🔴🔴 <b>EXTREME</b>: (Amount > ₹500 AND Avg ≥ 3) OR 5+ refunds in any month OR active every month<br>
+        🔴 <b>HIGH</b>: Avg ≥ 3 OR 4+ refunds in any month<br>
+        🟡 <b>POTENTIAL</b>: Avg ≥ 2 OR almost every month active<br><br>
+        <i>Each customer appears only ONCE — in the highest-priority tier they qualify for.</i>
     </div>
     """, unsafe_allow_html=True)
    
@@ -1077,36 +1165,64 @@ with tab3:
    
     if st.button("🔄 Load High Risk Customers"):
         cash_df, jc_df, manual_df = load_all_data()
-        with st.spinner("Analyzing customer data..."):
-            high_risk_df = get_high_risk_customers_optimized(cash_df, jc_df, manual_df, current_year, current_month)
+        with st.spinner("Analyzing customer data across 3 tiers..."):
+            high_risk_df = get_high_risk_customers_optimized(
+                cash_df, jc_df, manual_df, current_year, current_month
+            )
             st.session_state.high_risk_data = high_risk_df
    
     if st.session_state.high_risk_data is not None and not st.session_state.high_risk_data.empty:
-        high_risk_df = st.session_state.high_risk_data
+        high_risk_df = st.session_state.high_risk_data.copy()
+
         risk_order = {"🔴🔴 EXTREME": 0, "🔴 HIGH": 1, "🟡 POTENTIAL": 2}
-        high_risk_df["Risk_Order"] = high_risk_df["Risk Level"].map(risk_order)
-        high_risk_df = high_risk_df.sort_values(["Risk_Order", "Total Amount"], ascending=[True, False])
-        high_risk_df = high_risk_df.drop(columns=["Risk_Order"])
+        high_risk_df["Risk_Order"] = high_risk_df["Risk Level"].map(risk_order).fillna(3)
+        high_risk_df = high_risk_df.sort_values(
+            ["Tier Priority", "Risk_Order", "Total Amount"],
+            ascending=[True, True, False]
+        ).reset_index(drop=True)
        
-        st.success(f"Found {len(high_risk_df)} high-risk customers")
+        st.success(f"Found **{len(high_risk_df)}** high-risk customers across all tiers")
        
+        tier1 = high_risk_df[high_risk_df["Tier Priority"] == 1]
+        tier2 = high_risk_df[high_risk_df["Tier Priority"] == 2]
+        tier3 = high_risk_df[high_risk_df["Tier Priority"] == 3]
+
         col1, col2, col3, col4, col5 = st.columns(5)
         with col1:
-            st.metric("Total High Risk", len(high_risk_df))
+            st.metric("📅 Last 3 Months", len(tier1))
         with col2:
-            st.metric("🔴🔴 Extreme", len(high_risk_df[high_risk_df["Risk Level"] == "🔴🔴 EXTREME"]))
+            st.metric("📅 Last 6 Months", len(tier2))
         with col3:
-            st.metric("🔴 High", len(high_risk_df[high_risk_df["Risk Level"] == "🔴 HIGH"]))
+            st.metric("📆 Full Year", len(tier3))
         with col4:
-            st.metric("🟡 Potential", len(high_risk_df[high_risk_df["Risk Level"] == "🟡 POTENTIAL"]))
+            st.metric("🔴🔴 Extreme", len(high_risk_df[high_risk_df["Risk Level"] == "🔴🔴 EXTREME"]))
         with col5:
             st.metric("Total Amount", f"₹{high_risk_df['Total Amount'].sum():,.2f}")
-       
-        month_abbr = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][:current_month]
-       
+
+        st.markdown("---")
+
+        tier_tabs = st.tabs([
+            f"📅 Last 3 Months ({len(tier1)})",
+            f"📅 Last 6 Months ({len(tier2)})",
+            f"📆 Full Year ({len(tier3)})",
+            f"👥 All ({len(high_risk_df)})"
+        ])
+
+        month_abbr_full = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                           "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+        all_month_cols = [m for m in month_abbr_full if m in high_risk_df.columns]
+
+        base_cols = [
+            "BZID", "Risk Level", "Analysis Window", "Status",
+            "Total Refunds", "Monthly Average", "Months Active",
+            "Max Monthly Refunds", "Total Amount",
+            "Cash_UPI", "Jumbocash", "Manual_Cash",
+        ] + all_month_cols
+
         column_config = {
             "BZID": st.column_config.TextColumn("BZID"),
             "Risk Level": st.column_config.TextColumn("Risk Level"),
+            "Analysis Window": st.column_config.TextColumn("Analysis Window"),
             "Status": st.column_config.TextColumn("Status"),
             "Total Refunds": st.column_config.NumberColumn("Total Refunds", format="%d"),
             "Monthly Average": st.column_config.NumberColumn("Avg/Month", format="%.2f"),
@@ -1117,9 +1233,9 @@ with tab3:
             "Jumbocash": st.column_config.NumberColumn("Jumbocash (₹)", format="₹%.2f"),
             "Manual_Cash": st.column_config.NumberColumn("Manual Cash (₹)", format="₹%.2f"),
         }
-        for month in month_abbr:
-            column_config[month] = st.column_config.TextColumn(month)
-       
+        for m in all_month_cols:
+            column_config[m] = st.column_config.TextColumn(m)
+
         def highlight_risk(row):
             risk = row.get('Risk Level', '')
             if 'EXTREME' in risk:
@@ -1129,19 +1245,51 @@ with tab3:
             elif 'POTENTIAL' in risk:
                 return ['background-color: #fff3cd;'] * len(row)
             return [''] * len(row)
-       
-        st.dataframe(
-            high_risk_df.style.apply(highlight_risk, axis=1),
-            use_container_width=True,
-            hide_index=True,
-            column_config=column_config
+
+        def render_tier(df_subset, key_suffix):
+            if df_subset.empty:
+                st.info("No customers in this tier.")
+                return
+            display_df = df_subset[[c for c in base_cols if c in df_subset.columns]].copy()
+            st.dataframe(
+                display_df.style.apply(highlight_risk, axis=1),
+                use_container_width=True,
+                hide_index=True,
+                column_config=column_config,
+                key=f"tier_table_{key_suffix}"
+            )
+
+        with tier_tabs[0]:
+            st.markdown("### 📅 Tier 1 — Customers with high refund activity in the **last 3 months**")
+            st.caption("These are the most urgent — recent, frequent, high-value refund behavior.")
+            render_tier(tier1, "t1")
+
+        with tier_tabs[1]:
+            st.markdown("### 📅 Tier 2 — Customers flagged over the **last 6 months**")
+            st.caption("Not urgent enough for Tier 1, but still showing sustained refund patterns.")
+            render_tier(tier2, "t2")
+
+        with tier_tabs[2]:
+            st.markdown("### 📆 Tier 3 — Customers flagged only over the **full year**")
+            st.caption("Long-tail risk — lower priority but worth monitoring.")
+            render_tier(tier3, "t3")
+
+        with tier_tabs[3]:
+            st.markdown("### 👥 All High Risk Customers")
+            st.caption("Sorted by tier priority (3-month → 6-month → yearly), then by risk level.")
+            render_tier(high_risk_df, "all")
+
+        export_df = high_risk_df[[c for c in base_cols if c in high_risk_df.columns]].copy()
+        csv = export_df.to_csv(index=False)
+        st.download_button(
+            "📥 Download High Risk Report (CSV)",
+            data=csv,
+            file_name=f"high_risk_customers_{current_year}_month{current_month}.csv",
+            mime="text/csv"
         )
        
-        csv = high_risk_df.to_csv(index=False)
-        st.download_button("📥 Download Report", data=csv, file_name=f"high_risk_customers_{current_year}.csv", mime="text/csv")
-       
     elif st.session_state.high_risk_data is not None:
-        st.info("✅ No high-risk customers found!")
+        st.info("✅ No high-risk customers found across any tier!")
 
 # ================= TAB 4: City Analysis =================
 with tab4:
@@ -1486,14 +1634,6 @@ with tab6:
             - `Buy 2 get 1` (Buy 2 get 1 free)
             - Or just the product name for 1:1 freebie ratio
             """)
-        
-        if refund_amount > 0 and refund_amount < 100 and total_monthly_count < 5:
-            st.markdown("---")
-            st.markdown("### 🚀 Process Refund")
-            
-            if st.button(f"💰 Process ₹{refund_amount:.2f} Directly", type="primary"):
-                st.success(f"✅ Refund of ₹{refund_amount:.2f} initiated successfully for BZID: {bzid}!")
-                st.info("📌 Please verify the refund in the Refund Tracker")
     
     st.markdown("---")
     st.markdown("""
