@@ -549,28 +549,58 @@ def parse_freebie_offer(offer_text):
     return 1, 1
 
 def calculate_freebie_refund_from_sheet(row, ordered_qty, manual_refund_value=None):
+    """
+    Calculate freebie refund with correct per-freebie value.
+
+    IMPORTANT: When the offer gives multiple freebies (e.g., "22+2"),
+    the sheet's refund value is for the WHOLE bundle of freebies.
+    So per-freebie value = refund_value / free_given.
+    """
     freebie_offer = row.get('Mentioned Freebie', '')
     if pd.isna(freebie_offer) or freebie_offer == '':
         return 0, "No freebie offer found"
+
     refund_value_raw = row.get('Refund value', '')
     parsed_value, is_sp = parse_refund_value(refund_value_raw)
+
+    ordered_required, free_given = parse_freebie_offer(freebie_offer)
+    if ordered_required is None or free_given is None or free_given <= 0:
+        return 0, f"Could not parse offer: '{freebie_offer}'."
+
     if is_sp:
         if manual_refund_value is not None and manual_refund_value > 0:
-            refund_value = manual_refund_value
+            total_bundle_value = manual_refund_value
         else:
             return 0, "SP (Selling Price) - Please enter the selling price"
     else:
         if parsed_value is None or parsed_value == 0:
             return 0, f"No refund value specified for offer: {freebie_offer}"
-        refund_value = parsed_value
-    ordered_required, free_given = parse_freebie_offer(freebie_offer)
-    if ordered_required is None or free_given is None:
-        return 0, f"Could not parse offer: '{freebie_offer}'."
-    expected_freebies = (ordered_qty // ordered_required) * free_given
+        total_bundle_value = parsed_value
+
+    per_freebie_value = total_bundle_value / free_given
+
+    num_bundles = ordered_qty // ordered_required
+    expected_freebies = num_bundles * free_given
+
     if expected_freebies == 0:
-        return 0, f"No freebies due for {ordered_qty} items."
-    refund_amount = expected_freebies * refund_value
-    return refund_amount, f"Missing {expected_freebies} freebie(s) x Rs.{refund_value} = Rs.{refund_amount}"
+        return 0, f"Customer ordered {ordered_qty}, needs {ordered_required} for {free_given} freebie(s). No freebies due."
+
+    refund_amount = expected_freebies * per_freebie_value
+
+    if free_given > 1:
+        detail = (
+            f"{num_bundles} bundle(s) x {free_given} freebies = {expected_freebies} freebies "
+            f"x ₹{per_freebie_value:.2f} each "
+            f"(₹{total_bundle_value:.2f} per bundle of {free_given}) "
+            f"= ₹{refund_amount:.2f}"
+        )
+    else:
+        detail = (
+            f"{expected_freebies} freebie(s) x ₹{per_freebie_value:.2f} "
+            f"= ₹{refund_amount:.2f}"
+        )
+
+    return refund_amount, detail
 
 # ================= REFRESH =================
 if st.button("🔄 Refresh Data"):
@@ -1082,9 +1112,10 @@ with tab6:
             "Date": st.column_config.DateColumn("Date"),
             "Item": st.column_config.TextColumn("Product Item"),
             "Mentioned Freebie": st.column_config.TextColumn("Freebie Offer"),
-            "Refund value": st.column_config.TextColumn("Refund Value")
+            "Refund value": st.column_config.TextColumn("Refund Value (per bundle)")
         }
     )
+    st.caption("ℹ️ **Note:** The refund value in the sheet is for the WHOLE bundle. For offers like `22+2` where the value is ₹8, that means ₹4 per freebie (since 2 freebies are given).")
     
     has_sp = any(freebie_df['Refund value'].astype(str).str.upper().str.strip() == 'SP')
     
@@ -1110,16 +1141,34 @@ with tab6:
     
     selected_row = freebie_df[freebie_df['Item'] == selected_product].iloc[0] if selected_product else None
     
+    # Compute per-freebie value for display
+    per_freebie_preview = None
+    total_bundle_value_preview = None
+    free_given_preview = None
     if selected_row is not None:
         freebie_offer = selected_row.get('Mentioned Freebie', '')
         refund_value_raw = selected_row.get('Refund value', '')
         freebie_date = selected_row.get('Date', '')
         parsed_value, is_sp = parse_refund_value(refund_value_raw)
-        display_value = "SP" if is_sp else (f"₹{parsed_value:.2f}" if parsed_value is not None else refund_value_raw)
-        st.info(f"**Freebie Offer:** {freebie_offer} | **Refund Value:** {display_value} | **Date Added:** {freebie_date}")
         ordered_required, free_given = parse_freebie_offer(freebie_offer)
+        
+        if not is_sp and parsed_value is not None and free_given and free_given > 0:
+            per_freebie_preview = parsed_value / free_given
+            total_bundle_value_preview = parsed_value
+            free_given_preview = free_given
+        
+        display_value = "SP" if is_sp else (f"₹{parsed_value:.2f}" if parsed_value is not None else refund_value_raw)
+        
+        st.info(f"**Freebie Offer:** {freebie_offer} | **Bundle Refund Value:** {display_value} | **Date Added:** {freebie_date}")
+        
         if ordered_required and free_given:
             st.info(f"**Offer Details:** Buy {ordered_required} get {free_given} free")
+            if not is_sp and per_freebie_preview is not None and free_given > 1:
+                st.success(
+                    f"💡 **Per-Freebie Value Calculation:** "
+                    f"Sheet value ₹{total_bundle_value_preview:.2f} ÷ {free_given} freebies = "
+                    f"**₹{per_freebie_preview:.2f} per freebie**"
+                )
         else:
             st.warning(f"⚠️ Could not parse freebie offer: '{freebie_offer}'.")
     
@@ -1127,7 +1176,7 @@ with tab6:
     if selected_row is not None:
         _, is_sp = parse_refund_value(selected_row.get('Refund value', ''))
         if is_sp:
-            manual_price = st.number_input("💰 Enter Selling Price (₹)", min_value=0.0, value=10.0, step=1.0, help="Enter the selling price of the product")
+            manual_price = st.number_input("💰 Enter Selling Price (₹)", min_value=0.0, value=10.0, step=1.0, help="Enter the selling price of the product (this will be divided by the number of freebies)")
     
     if st.button("🧮 Calculate Refund", type="primary"):
         if not bzid_input_fb:
@@ -1155,6 +1204,14 @@ with tab6:
         ordered_required, free_given = parse_freebie_offer(freebie_offer)
         expected_freebies = (ordered_qty // ordered_required) * free_given if ordered_required else 0
         
+        # Determine what value to display
+        if is_sp:
+            display_total = manual_price if manual_price else 0
+        else:
+            parsed_val, _ = parse_refund_value(selected_row.get('Refund value', ''))
+            display_total = parsed_val if parsed_val else 0
+        display_per_freebie = display_total / free_given if free_given and free_given > 0 else display_total
+        
         col1, col2 = st.columns(2)
         with col1:
             st.markdown("#### Refund Details")
@@ -1163,15 +1220,18 @@ with tab6:
             st.write(f"**Freebie Offer:** {freebie_offer}")
             st.write(f"**Quantity Ordered:** {ordered_qty}")
             st.write(f"**Freebies Expected:** {expected_freebies}")
+            
             if is_sp:
                 st.write(f"**Selling Price (Manual):** ₹{manual_price:.2f}")
             else:
-                parsed_val, _ = parse_refund_value(selected_row.get('Refund value', ''))
-                st.write(f"**Refund Value per Freebie:** ₹{parsed_val:.2f}" if parsed_val else "**Refund Value:** N/A")
-            if refund_amount == 0:
-                st.write(f"**Refund Amount:** ₹{refund_amount:.2f} (No refund due)")
+                st.write(f"**Bundle Refund Value:** ₹{display_total:.2f}")
+            
+            if free_given and free_given > 1:
+                st.write(f"**Per-Freebie Value:** ₹{display_per_freebie:.2f} *(₹{display_total:.2f} ÷ {free_given} freebies)*")
             else:
-                st.write(f"**Refund Amount:** ₹{refund_amount:.2f}")
+                st.write(f"**Per-Freebie Value:** ₹{display_per_freebie:.2f}")
+            
+            st.write(f"**Refund Amount:** ₹{refund_amount:.2f}")
         
         with col2:
             st.markdown("#### Decision")
@@ -1206,13 +1266,10 @@ with tab6:
         st.markdown("---")
         st.markdown("### 📋 Detailed Breakdown")
         
-        if is_sp:
-            display_refund_value = manual_price
-        else:
-            parsed_val, _ = parse_refund_value(selected_row.get('Refund value', ''))
-            display_refund_value = parsed_val if parsed_val else 0
-        
         offer_parsed = "✅ Parsed" if (ordered_required and free_given) else "❌ Could not parse"
+        
+        # For the breakdown table
+        num_bundles = ordered_qty // ordered_required if ordered_required else 0
         
         st.markdown(f"""
         <table style="width: 100%; border-collapse: collapse; margin-top: 10px;">
@@ -1225,8 +1282,10 @@ with tab6:
             <tr><td style="padding: 10px; border-bottom: 1px solid #dee2e6;">Freebie Offer</td><td style="padding: 10px; border-bottom: 1px solid #dee2e6;">{freebie_offer}</td></tr>
             <tr><td style="padding: 10px; border-bottom: 1px solid #dee2e6;">Offer Parse Status</td><td style="padding: 10px; border-bottom: 1px solid #dee2e6;">{offer_parsed}</td></tr>
             <tr><td style="padding: 10px; border-bottom: 1px solid #dee2e6;">Quantity Ordered</td><td style="padding: 10px; border-bottom: 1px solid #dee2e6;">{ordered_qty}</td></tr>
+            <tr><td style="padding: 10px; border-bottom: 1px solid #dee2e6;">Bundles Qualified</td><td style="padding: 10px; border-bottom: 1px solid #dee2e6;">{num_bundles}</td></tr>
             <tr><td style="padding: 10px; border-bottom: 1px solid #dee2e6;">Freebies Expected</td><td style="padding: 10px; border-bottom: 1px solid #dee2e6;">{expected_freebies}</td></tr>
-            <tr><td style="padding: 10px; border-bottom: 1px solid #dee2e6;">Refund Value per Freebie</td><td style="padding: 10px; border-bottom: 1px solid #dee2e6;">₹{display_refund_value:.2f}</td></tr>
+            <tr><td style="padding: 10px; border-bottom: 1px solid #dee2e6;">Sheet's Bundle Refund Value</td><td style="padding: 10px; border-bottom: 1px solid #dee2e6;">₹{display_total:.2f} {'(for ' + str(free_given) + ' freebies)' if free_given and free_given > 1 else ''}</td></tr>
+            <tr><td style="padding: 10px; border-bottom: 1px solid #dee2e6;"><b>Per-Freebie Value</b></td><td style="padding: 10px; border-bottom: 1px solid #dee2e6;"><b>₹{display_per_freebie:.2f}</b> {' (₹' + f'{display_total:.2f}' + ' ÷ ' + str(free_given) + ')' if free_given and free_given > 1 else ''}</td></tr>
             <tr><td style="padding: 10px; border-bottom: 1px solid #dee2e6;">Total Refund Amount</td><td style="padding: 10px; border-bottom: 1px solid #dee2e6;">₹{refund_amount:.2f}</td></tr>
             <tr><td style="padding: 10px; border-bottom: 1px solid #dee2e6;">Monthly Refund Count (All Types)</td><td style="padding: 10px; border-bottom: 1px solid #dee2e6;">{total_monthly_count}</td></tr>
             <tr style="background-color: {'#d4edda' if refund_amount > 0 and refund_amount < 100 and total_monthly_count < 5 else '#f8d7da'}; font-weight: bold;">
@@ -1268,14 +1327,21 @@ with tab6:
         1. Refund amount must be < ₹100 to be approved<br>
         2. Customer must have less than 5 total refunds in the month<br>
         3. Both conditions must be met for APPROVAL<br><br>
+        <b>💰 Refund Value Logic:</b><br>
+        • The sheet's "Refund value" is the value of the <b>WHOLE bundle of freebies</b><br>
+        • For <b>22+2</b> with value <b>₹8</b>: ₹8 ÷ 2 = <b>₹4 per freebie</b><br>
+        • For <b>11+1</b> with value <b>₹9</b>: ₹9 ÷ 1 = <b>₹9 per freebie</b><br>
+        • For <b>Buy 2 Get 1 Free</b> with value <b>₹8</b>: ₹8 ÷ 1 = <b>₹8 per freebie</b><br>
+        • For <b>Buy 12 Get 2 Free</b> with value <b>₹34</b>: ₹34 ÷ 2 = <b>₹17 per freebie</b><br><br>
         <b>🎁 Freebie Offer Formats:</b><br>
-        • <b>Product Name only</b> (e.g., "Scrub pad") → 1:1 ratio (Buy 1 get 1 free)<br>
+        • <b>Product Name only</b> (e.g., "Scrub pad") → 1:1 ratio<br>
         • <b>"22+2"</b> → Buy 22 get 2 free<br>
         • <b>"11+1"</b> → Buy 11 get 1 free<br>
         • <b>"Buy 12 Get 2 Free"</b> → Buy 12 get 2 free<br>
         • <b>"Buy 2 get 1"</b> → Buy 2 get 1 free<br><br>
         <b>Special Case - SP (Selling Price):</b><br>
-        • When refund value is "SP", you need to enter the selling price manually<br><br>
+        • When refund value is "SP", you need to enter the selling price manually<br>
+        • The entered price will also be divided by the number of freebies<br><br>
         <b>How it works:</b><br>
         1. Enter the customer's BZID<br>
         2. Select the product and month<br>
