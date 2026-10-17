@@ -122,7 +122,7 @@ def parse_dates_robust(series):
     return pd.Series([pd.NaT] * len(series), index=series.index)
 
 # ================= LOAD SHEETS (READ-ONLY) =================
-@st.cache_data(ttl=600, show_spinner=False)
+@st.cache_data(ttl=600, max_entries=5, show_spinner=False)
 def load_sheet(sheet_id, sheet_name):
     try:
         client = get_client()
@@ -138,24 +138,22 @@ def load_sheet(sheet_id, sheet_name):
         data = ws.get_all_values()
         if len(data) <= 1:
             return pd.DataFrame()
+
         headers = [str(col).strip() if col else f"Column_{i}" for i, col in enumerate(data[0])]
-        data_rows = []
-        for row in data[1:]:
-            non_empty = sum(1 for cell in row if cell and str(cell).strip())
-            if non_empty >= 2:
-                data_rows.append(row)
-        if not data_rows:
+        width = len(headers)
+
+        # Filter and normalize each row in one pass. This avoids holding
+        # separate full-sheet data_rows and padded_rows lists in memory.
+        def normalized_nonempty_rows():
+            for row in data[1:]:
+                if sum(1 for cell in row if cell and str(cell).strip()) < 2:
+                    continue
+                yield row[:width] + [""] * max(0, width - len(row))
+
+        df = pd.DataFrame(normalized_nonempty_rows(), columns=headers)
+        if df.empty:
             return pd.DataFrame()
-        max_len = len(headers)
-        padded_rows = []
-        for row in data_rows:
-            if len(row) < max_len:
-                padded_rows.append(row + [''] * (max_len - len(row)))
-            elif len(row) > max_len:
-                padded_rows.append(row[:max_len])
-            else:
-                padded_rows.append(row)
-        df = pd.DataFrame(padded_rows, columns=headers)
+
         df.columns = df.columns.str.strip()
         df = fix_duplicate_columns(df)
         return df
@@ -164,7 +162,6 @@ def load_sheet(sheet_id, sheet_name):
         return pd.DataFrame()
 
 # ================= LOAD FREEBIE DATA =================
-@st.cache_data(ttl=600, show_spinner=False)
 def load_freebie_data():
     try:
         freebie_sheet_id = st.secrets["freebie_sheet_id"]
@@ -223,7 +220,6 @@ def process_refund_df(df):
     return df
 
 # ================= GET CUSTOMER MONTHLY REFUND COUNT =================
-@st.cache_data(ttl=600, show_spinner=False)
 def get_customer_monthly_refund_count(cash_df, jc_df, manual_df, bzid, month, year):
     total_count = 0
     for df in [cash_df, jc_df, manual_df]:
@@ -238,7 +234,6 @@ def get_customer_monthly_refund_count(cash_df, jc_df, manual_df, bzid, month, ye
     return total_count
 
 # ================= GET REFUND COUNT FOR PERIOD =================
-@st.cache_data(ttl=600, show_spinner=False)
 def get_refund_count_for_period(df, bzid, year, start_month=1, end_month=12):
     if df.empty:
         return 0
@@ -252,7 +247,6 @@ def get_refund_count_for_period(df, bzid, year, start_month=1, end_month=12):
     return int(mask.sum())
 
 # ================= GET MONTHLY COUNTS =================
-@st.cache_data(ttl=600, show_spinner=False)
 def get_monthly_counts(df, bzid, year):
     if df.empty:
         return [datetime(year, m, 1).strftime("%B") for m in range(1, 13)], [0] * 12
@@ -265,7 +259,6 @@ def get_monthly_counts(df, bzid, year):
     return names, counts
 
 # ================= HIGH RISK CUSTOMERS (OPTIMIZED, 3-TIER) =================
-@st.cache_data(ttl=600, show_spinner=False)
 def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_month):
     if current_month is None:
         return pd.DataFrame()
@@ -425,7 +418,6 @@ def get_high_risk_customers_optimized(cash_df, jc_df, manual_df, year, current_m
     return pd.DataFrame(final_rows)
 
 # ================= CITY ANALYSIS =================
-@st.cache_data(ttl=600, show_spinner=False)
 def get_city_analysis(cash_df, jc_df, manual_df, year, current_month):
     def prepare(df):
         if df.empty or "Date" not in df.columns:
@@ -448,7 +440,6 @@ def get_city_analysis(cash_df, jc_df, manual_df, year, current_month):
     ).reset_index().sort_values("Total_Amount", ascending=False)
 
 # ================= HUB ANALYSIS =================
-@st.cache_data(ttl=600, show_spinner=False)
 def get_hub_analysis(cash_df, jc_df, manual_df, year, current_month):
     def prepare(df):
         if df.empty or "Date" not in df.columns:
